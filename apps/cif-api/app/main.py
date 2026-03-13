@@ -9,6 +9,7 @@ from app.api.internal import router as internal_router
 from app.api.experiments import router as experiments_router
 from app.api.analytics import router as analytics_router
 from app.api.ai import router as ai_router
+from app.api.retrieval import router as retrieval_router
 
 app = FastAPI(title="CIF API", version="0.1.0")
 
@@ -37,6 +38,9 @@ app.include_router(analytics_router)
 
 # AI Provider — has own /api/v1 prefix
 app.include_router(ai_router)
+
+# Retrieval Layer — has own /api/v1 prefix
+app.include_router(retrieval_router)
 
 # Internal routes — no auth, no /api/v1 prefix
 app.include_router(internal_router)

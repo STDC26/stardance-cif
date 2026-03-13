@@ -45,6 +45,7 @@ class ResolvedSurface(BaseModel):
 class SurfaceOut(BaseModel):
     id: UUID
     name: str
+    slug: str
     description: str | None
     type: str
     status: str

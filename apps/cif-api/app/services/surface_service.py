@@ -1,28 +1,37 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.models.surface import Surface, SurfaceVersion
-from app.models.component import Component, SurfaceComponent, ComponentType
+from app.models.surface import Surface, SurfaceVersion, ReviewState
+from app.models.component import Component, SurfaceComponent
 from app.schemas.surface import SurfaceCreateIn, ResolvedSurface, ResolvedComponent
 from app.registry.component_registry import validate_component_config
+from app.core.slugify import slugify, unique_suffix
 import uuid
 
 
-async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> tuple[Surface, list[str]]:
-    """Create a surface with versioned components. Returns (surface, validation_errors)."""
-    errors = []
+async def generate_unique_slug(db: AsyncSession, name: str) -> str:
+    base = slugify(name)
+    slug = base
+    while True:
+        result = await db.execute(select(Surface).where(Surface.slug == slug))
+        if not result.scalar_one_or_none():
+            return slug
+        slug = f"{base}-{unique_suffix()}"
 
-    # Validate all component configs upfront
+
+async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> tuple[Surface | None, list[str]]:
+    errors = []
     for section in data.sections:
         for comp in section.components:
             errs = validate_component_config(comp.component_type, comp.config)
             errors.extend(errs)
-
     if errors:
         return None, errors
 
-    # Create surface
+    slug = await generate_unique_slug(db, data.name)
+
     surface = Surface(
         name=data.name,
+        slug=slug,
         description=data.description,
         type=data.type,
         status="draft",
@@ -31,17 +40,16 @@ async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> tuple[Surfa
     db.add(surface)
     await db.flush()
 
-    # Create initial version
     version = SurfaceVersion(
         surface_id=surface.id,
         version_number=1,
         status="draft",
+        review_state=ReviewState.draft,
         config={"sections": [s.model_dump() for s in data.sections]}
     )
     db.add(version)
     await db.flush()
 
-    # Create and link components
     for section in data.sections:
         for idx, comp_data in enumerate(section.components):
             component = Component(
@@ -67,15 +75,11 @@ async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> tuple[Surfa
 
 
 async def resolve_surface(db: AsyncSession, surface_id: uuid.UUID) -> ResolvedSurface | None:
-    """Resolve a surface into its full component tree."""
-    result = await db.execute(
-        select(Surface).where(Surface.id == surface_id)
-    )
+    result = await db.execute(select(Surface).where(Surface.id == surface_id))
     surface = result.scalar_one_or_none()
     if not surface:
         return None
 
-    # Get latest version
     version_result = await db.execute(
         select(SurfaceVersion)
         .where(SurfaceVersion.surface_id == surface_id)
@@ -86,7 +90,6 @@ async def resolve_surface(db: AsyncSession, surface_id: uuid.UUID) -> ResolvedSu
     if not version:
         return None
 
-    # Get all surface components with their component data
     sc_result = await db.execute(
         select(SurfaceComponent, Component)
         .join(Component, SurfaceComponent.component_id == Component.id)
@@ -112,10 +115,7 @@ async def resolve_surface(db: AsyncSession, surface_id: uuid.UUID) -> ResolvedSu
             sections_map[sc.section_id] = []
         sections_map[sc.section_id].append(rc.model_dump())
 
-    sections = [
-        {"section_id": k, "components": v}
-        for k, v in sections_map.items()
-    ]
+    sections = [{"section_id": k, "components": v} for k, v in sections_map.items()]
 
     return ResolvedSurface(
         surface_id=str(surface.id),

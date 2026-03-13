@@ -17,12 +17,16 @@ class EventType(str, enum.Enum):
     diagnostic_complete = "diagnostic_complete"
     offer_view = "offer_view"
     conversion = "conversion"
+    step_view = "step_view"
+    answer_submitted = "answer_submitted"
+    branch_selected = "branch_selected"
+    qualification_result = "qualification_result"
 
 class SignalEvent(Base):
     __tablename__ = "signal_events"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    surface_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("surfaces.id"), nullable=False, index=True)
+    surface_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     experiment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("experiments.id"), index=True)
     event_type: Mapped[EventType] = mapped_column(
         SAEnum(EventType, name="eventtype"), nullable=False
@@ -31,5 +35,3 @@ class SignalEvent(Base):
     session_id: Mapped[str | None] = mapped_column(String(255), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
-    surface: Mapped["Surface"] = relationship(back_populates="signal_events")
-    experiment: Mapped["Experiment | None"] = relationship(back_populates="signal_events")

@@ -1,65 +1,28 @@
-import Image from "next/image";
-
-export default function Home() {
+export default function DashboardPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
+    <main style={{ padding: "64px 48px", maxWidth: "960px", margin: "0 auto" }}>
+      <h1 style={{ fontSize: "2.5rem", fontWeight: 800, marginBottom: "8px" }}>Stardance CIF</h1>
+      <p style={{ fontSize: "1.1rem", color: "#555", marginBottom: "48px" }}>
+        Creative Intelligence Factory — Operator Console
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "20px" }}>
+        {[
+          { href: "/deployments", label: "Deployment Console", desc: "Publish, deploy, and rollback asset versions", color: "#1F3A6E" },
+          { href: "/surfaces", label: "Surfaces", desc: "View and manage all conversion surfaces", color: "#2E86AB" },
+          { href: "/components", label: "Components", desc: "Browse the component library", color: "#2E86AB" },
+          { href: "/s/phase-2-gate-test-lead-capture-a1ea", label: "Live Surface Demo", desc: "View the Phase-2 gate test surface live", color: "#198754" },
+          { href: "/q/phase-4-gate-test-qds-sq2x", label: "Live QDS Demo", desc: "Run the Phase-4 gate test diagnostic", color: "#198754" },
+        ].map(({ href, label, desc, color }) => (
+          <a key={href} href={href} style={{
+            padding: "28px", border: `2px solid ${color}20`,
+            borderRadius: "12px", textDecoration: "none",
+            background: "#fff", display: "block",
+          }}>
+            <div style={{ fontWeight: 700, fontSize: "1.1rem", color, marginBottom: "6px" }}>{label}</div>
+            <div style={{ color: "#666", fontSize: "0.9rem" }}>{desc}</div>
           </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        ))}
+      </div>
+    </main>
   );
 }

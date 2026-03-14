@@ -9,12 +9,12 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import require_api_key
-from app.db.session import get_db
+from app.db.session import AsyncSessionLocal
 from app.services.retrieval import build_context, RetrievalRequest
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,6 @@ async def retrieval_health(_: str = Depends(require_api_key)):
 async def get_context(
     body: ContextRequest,
     _: str = Depends(require_api_key),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Builds and returns a context bundle for the given request.
@@ -65,17 +64,18 @@ async def get_context(
                    "qds_asset_id, or slug is required.",
         )
 
-    request = RetrievalRequest(
-        asset_id=body.asset_id,
-        experiment_id=body.experiment_id,
-        qds_asset_id=body.qds_asset_id,
-        slug=body.slug,
-        include_signals=body.include_signals,
-        include_experiment=body.include_experiment,
-        include_qds=body.include_qds,
-    )
+    async with AsyncSessionLocal() as db:
+        request = RetrievalRequest(
+            asset_id=body.asset_id,
+            experiment_id=body.experiment_id,
+            qds_asset_id=body.qds_asset_id,
+            slug=body.slug,
+            include_signals=body.include_signals,
+            include_experiment=body.include_experiment,
+            include_qds=body.include_qds,
+        )
 
-    context = await build_context(request=request, db=db)
+        context = await build_context(request=request, db=db)
 
     return {
         "status": "ok",

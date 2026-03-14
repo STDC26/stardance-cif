@@ -40,6 +40,7 @@ async def analyze_asset(
                         latency_ms, context_keys
     """
     try:
+        # Try surface lookup first
         context = await build_context(
             request=RetrievalRequest(
                 asset_id=asset_id,
@@ -50,13 +51,31 @@ async def analyze_asset(
             db=db,
         )
 
+        # Fall back to QDS lookup if surface returned empty
+        if not context and slug:
+            context = await build_context(
+                request=RetrievalRequest(
+                    slug=slug,
+                    include_signals=True,
+                    include_experiment=True,
+                    include_qds=True,
+                ),
+                db=db,
+            )
+
         if not context:
             return {"error": "No asset context retrieved"}
 
+        # Use QDS name as fallback for asset name
+        asset_name = (context.get('asset_name') or
+                      context.get('qds_name', 'Unknown'))
+        asset_type = (context.get('asset_type') or
+                      ('qds' if context.get('qds_name') else 'Unknown'))
+
         prompt = (
             f"Analyze the performance of this asset.\n"
-            f"Asset: {context.get('asset_name', 'Unknown')}\n"
-            f"Type: {context.get('asset_type', 'Unknown')}\n"
+            f"Asset: {asset_name}\n"
+            f"Type: {asset_type}\n"
             f"Status: {context.get('asset_status', 'Unknown')}\n"
             f"Versions: {context.get('asset_version_count', 0)}\n"
             f"Latest version: "
@@ -71,6 +90,16 @@ async def analyze_asset(
             f"{context.get('experiment_recommended_winner', 'None')}\n"
         )
 
+        # Add QDS context if present
+        if context.get('qds_name'):
+            prompt += (
+                f"QDS step count: {context.get('qds_step_count', 0)}\n"
+                f"QDS completion rate: "
+                f"{context.get('qds_completion_rate', '0%')}\n"
+                f"QDS total sessions: "
+                f"{context.get('qds_total_sessions', 0)}\n"
+            )
+
         result = await generate(
             task_type=AITaskType.OPERATOR_ASSISTANT,
             prompt=prompt,
@@ -79,8 +108,8 @@ async def analyze_asset(
         )
 
         return {
-            "asset_name": context.get("asset_name", ""),
-            "asset_type": context.get("asset_type", ""),
+            "asset_name": asset_name,
+            "asset_type": asset_type,
             "asset_status": context.get("asset_status", ""),
             "version_count": context.get("asset_version_count", 0),
             "deployed_version": context.get("asset_deployed_version", ""),

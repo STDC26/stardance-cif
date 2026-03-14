@@ -10,7 +10,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import require_api_key
@@ -29,16 +29,6 @@ class ContextRequest(BaseModel):
     include_signals: bool = True
     include_experiment: bool = True
     include_qds: bool = False
-
-    @model_validator(mode="after")
-    def require_at_least_one_identifier(self):
-        if not any([self.asset_id, self.experiment_id,
-                    self.qds_asset_id, self.slug]):
-            raise ValueError(
-                "At least one of asset_id, experiment_id, "
-                "qds_asset_id, or slug is required."
-            )
-        return self
 
 
 @router.get("/health")
@@ -67,6 +57,14 @@ async def get_context(
     Builds and returns a context bundle for the given request.
     Used to inspect what context the AI router will receive.
     """
+    if not any([body.asset_id, body.experiment_id,
+                body.qds_asset_id, body.slug]):
+        raise HTTPException(
+            status_code=422,
+            detail="At least one of asset_id, experiment_id, "
+                   "qds_asset_id, or slug is required.",
+        )
+
     request = RetrievalRequest(
         asset_id=body.asset_id,
         experiment_id=body.experiment_id,

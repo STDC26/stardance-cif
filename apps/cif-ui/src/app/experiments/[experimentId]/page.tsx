@@ -6,6 +6,8 @@ import {
   fetchExperimentAnalytics,
   promoteExperimentWinner,
 } from "@/lib/deployment-api";
+import { getExperimentInsight, type ExperimentInsight } from "@/lib/intelligence-api";
+import InsightPanel from "@/components/intelligence/InsightPanel";
 
 type VariantResult = {
   variant_id: string;
@@ -56,6 +58,9 @@ export default function ExperimentResultsPage() {
   const [error, setError] = useState<string | null>(null);
   const [promoting, setPromoting] = useState(false);
   const [promoteResult, setPromoteResult] = useState<string | null>(null);
+  const [insight, setInsight] = useState<ExperimentInsight | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightError, setInsightError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -273,8 +278,53 @@ export default function ExperimentResultsPage() {
           </div>
         )}
 
-        <div className="text-xs text-gray-400 text-right">
+        <div className="text-xs text-gray-400 text-right mb-8">
           Generated: {new Date(result.generated_at).toLocaleString()}
+        </div>
+
+        {/* AI Experiment Analysis */}
+        <div className="border-t border-gray-200 pt-8">
+          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">
+            AI Experiment Analysis
+          </h2>
+          <button
+            onClick={() => {
+              setInsightLoading(true);
+              setInsightError(null);
+              getExperimentInsight(experimentId)
+                .then((data) => {
+                  setInsight(data);
+                  setInsightLoading(false);
+                })
+                .catch((e) => {
+                  setInsightError(e instanceof Error ? e.message : "Failed to generate insight.");
+                  setInsightLoading(false);
+                });
+            }}
+            disabled={insightLoading}
+            className="text-sm px-4 py-2 border border-gray-200 rounded-lg
+              hover:bg-gray-50 disabled:opacity-50 mb-4"
+          >
+            {insightLoading ? "Generating…" : "Generate AI Insight"}
+          </button>
+
+          {insightLoading && (
+            <p className="text-xs text-gray-400 mb-4">
+              Generating via local inference… this may take up to 30 seconds.
+            </p>
+          )}
+
+          {(insightLoading || insight || insightError) && (
+            <InsightPanel
+              title="Experiment Analysis"
+              insight={insight?.insight ?? ""}
+              provider={insight?.provider ?? ""}
+              latency_ms={insight?.latency_ms ?? 0}
+              context_keys={insight?.context_keys}
+              isLoading={insightLoading}
+              error={insightError}
+            />
+          )}
         </div>
       </div>
     </div>

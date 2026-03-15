@@ -2,7 +2,7 @@
 
 import { useCallback, useRef } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://10.0.0.75:8000";
 
 function getSessionId(): string {
   if (typeof window === "undefined") return "ssr";

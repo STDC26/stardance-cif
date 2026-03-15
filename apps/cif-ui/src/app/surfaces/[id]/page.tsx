@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { SurfaceRenderer, ResolvedSurface } from "@/components/SurfaceRenderer";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://10.0.0.75:8000";
 
 export default function SurfaceDetailPage() {
   const params = useParams();

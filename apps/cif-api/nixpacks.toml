@@ -1,5 +1,5 @@
 [phases.install]
-cmds = ['python3 -m ensurepip --upgrade && python3 -m pip install .']
+cmds = ['python3 -m venv /opt/venv && /opt/venv/bin/pip install .']
 
 [start]
 cmd = 'alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT'

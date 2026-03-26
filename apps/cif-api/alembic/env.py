@@ -1,4 +1,5 @@
 import os
+import re
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -6,19 +7,15 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Inject DATABASE_URL from environment into alembic config.
-# Railway provides postgresql:// — convert to psycopg2 sync driver.
-_db_url = os.getenv("DATABASE_URL", "")
-if _db_url.startswith("postgresql://"):
-    _db_url = _db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-if _db_url:
-    config.set_main_option("sqlalchemy.url", _db_url)
+# Build a psycopg2 (sync) URL from DATABASE_URL regardless of its driver prefix.
+# Railway provides postgresql:// or postgresql+asyncpg:// — alembic needs psycopg2.
+_raw_url = os.getenv("DATABASE_URL", "")
+_sync_url = re.sub(r"^postgresql(?:\+\w+)?://", "postgresql+psycopg2://", _raw_url)
+if _sync_url:
+    config.set_main_option("sqlalchemy.url", _sync_url)
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -34,7 +31,6 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
@@ -45,12 +41,11 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
         )
-
         with context.begin_transaction():
             context.run_migrations()
 

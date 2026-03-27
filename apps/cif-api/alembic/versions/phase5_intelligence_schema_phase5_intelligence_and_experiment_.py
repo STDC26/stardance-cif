@@ -21,9 +21,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
 
-    # --- drop legacy experiments table (Phase-2 surface experiments) ---
-    op.drop_constraint("signal_events_experiment_id_fkey", "signal_events", type_="foreignkey")
-    op.drop_table("experiments")
+    # --- drop legacy objects with IF EXISTS (may not exist in fresh DB) ---
+    op.execute("ALTER TABLE signal_events DROP CONSTRAINT IF EXISTS signal_events_experiment_id_fkey")
+    op.execute("DROP TABLE IF EXISTS experiments")
+
+    # --- create assets table (required by experiments, signal_aggregates, insight_reports) ---
+    op.create_table(
+        "assets",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("name", sa.String(255), nullable=False),
+        sa.Column("type", sa.String(100), nullable=False),
+        sa.Column("url", sa.String(2048), nullable=False),
+        sa.Column("asset_metadata", postgresql.JSONB(), nullable=False, server_default="{}"),
+        sa.Column("created_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now()),
+    )
+
+    # --- add experiment_id to signal_events (missing from initial schema) ---
+    op.execute("ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS experiment_id UUID")
 
     # --- experiments ---
     op.create_table(

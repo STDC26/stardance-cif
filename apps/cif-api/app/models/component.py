@@ -19,6 +19,7 @@ class ComponentType(str, enum.Enum):
     faq = "faq"
     diagnostic_entry = "diagnostic_entry"
     trust_bar = "trust_bar"
+    content_grid = "content_grid"
 
 class Component(Base):
     __tablename__ = "components"

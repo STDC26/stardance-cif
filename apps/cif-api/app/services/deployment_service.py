@@ -7,6 +7,41 @@ from app.models.deployment import Deployment, DeploymentEnvironment, DeploymentS
 from app.models.experiment import Experiment
 from app.core.slugify import slugify, unique_suffix
 
+# render_as_html — GC1 Phase 3 P3-04 — enables FORGE conversion hub deployment
+
+_DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{title}}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'IBM Plex Mono', monospace; background: #f8f7f4; color: #1a1917; padding: 2rem; }
+  h1 { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 2rem; margin-bottom: 1rem; }
+  .content { max-width: 800px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div class="content">
+<h1>{{title}}</h1>
+{{body}}
+</div>
+</body>
+</html>"""
+
+
+def render_as_html(surface_payload: dict, template: str | None = None) -> str:
+    tmpl = template if template is not None else _DEFAULT_HTML_TEMPLATE
+    title = surface_payload.get("title", "Stardance Surface")
+    body = surface_payload.get("content", "") or surface_payload.get("body", "")
+    return tmpl.replace("{{title}}", title).replace("{{body}}", body)
+
+
+def render_surface_as_html(surface_payload: dict, template: str | None = None) -> str:
+    return render_as_html(surface_payload, template)
+
 
 # Valid state transitions
 VALID_TRANSITIONS = {

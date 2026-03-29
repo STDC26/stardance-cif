@@ -10,6 +10,7 @@ import { Testimonial } from "@/components/primitives/Testimonial";
 import { FAQ } from "@/components/primitives/FAQ";
 import { DiagnosticEntry } from "@/components/primitives/DiagnosticEntry";
 import { TrustBar } from "@/components/primitives/TrustBar";
+import { ContentGrid } from "@/components/primitives/ContentGrid";
 import type { ComponentType as ReactComponentType } from "react";
 
 export const COMPONENT_REGISTRY: Record<string, ReactComponentType<any>> = {
@@ -25,4 +26,5 @@ export const COMPONENT_REGISTRY: Record<string, ReactComponentType<any>> = {
   faq: FAQ,
   diagnostic_entry: DiagnosticEntry,
   trust_bar: TrustBar,
+  content_grid: ContentGrid,
 };

@@ -51,6 +51,10 @@ COMPONENT_SCHEMAS: dict[ComponentType, dict[str, Any]] = {
         "required": ["items"],
         "optional": ["icon_asset_ids", "variant"]
     },
+    ComponentType.content_grid: {
+        "required": ["items"],
+        "optional": ["columns", "gap", "style_variant"]
+    },
 }
 
 def validate_component_config(

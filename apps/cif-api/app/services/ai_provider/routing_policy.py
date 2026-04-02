@@ -69,3 +69,14 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60.0"))
 ANTHROPIC_TIMEOUT = float(os.getenv("ANTHROPIC_TIMEOUT", "30.0"))
+
+# ── stardance-llm-service routing ──────────────────────────────────────────
+STARDANCE_LLM_SERVICE_URL = os.getenv("STARDANCE_LLM_SERVICE_URL", "http://localhost:8003")
+
+CIF_TO_LLM_TASK_MAP: dict[str, str] = {
+    "advanced_reasoning": "specification_generation",
+    "narrate": "specification_generation",
+    "insight": "trait_mapping",
+    "recommend": "structured_extraction",
+    "explain": "validation",
+}

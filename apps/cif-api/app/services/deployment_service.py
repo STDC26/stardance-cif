@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,15 +33,26 @@ _DEFAULT_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def render_as_html(surface_payload: dict, template: str | None = None) -> str:
+def render_as_html(
+    surface_payload: dict,
+    template: str | None = None,
+    decision_context: dict | None = None,
+) -> str:
     tmpl = template if template is not None else _DEFAULT_HTML_TEMPLATE
     title = surface_payload.get("title", "Stardance Surface")
     body = surface_payload.get("content", "") or surface_payload.get("body", "")
-    return tmpl.replace("{{title}}", title).replace("{{body}}", body)
+    html = tmpl.replace("{{title}}", title).replace("{{body}}", body)
+    if decision_context is not None:
+        html += f"\n<!-- SD-DECISION-CONTEXT: {json.dumps(decision_context)} -->"
+    return html
 
 
-def render_surface_as_html(surface_payload: dict, template: str | None = None) -> str:
-    return render_as_html(surface_payload, template)
+def render_surface_as_html(
+    surface_payload: dict,
+    template: str | None = None,
+    decision_context: dict | None = None,
+) -> str:
+    return render_as_html(surface_payload, template, decision_context)
 
 
 # Valid state transitions

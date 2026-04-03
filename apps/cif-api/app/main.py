@@ -1,5 +1,7 @@
+import uuid
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.surfaces import router as surfaces_router
 from app.api.signals import router as signals_router
 from app.api.deployments import router as deployments_router
@@ -13,7 +15,19 @@ from app.api.retrieval import router as retrieval_router
 from app.api.insights import router as insights_router
 from app.api.copilot import router as copilot_router
 
+
+class TraceIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        trace_id = request.headers.get("X-Trace-ID", str(uuid.uuid4()))
+        request.state.trace_id = trace_id
+        response = await call_next(request)
+        response.headers["X-Trace-ID"] = trace_id
+        return response
+
+
 app = FastAPI(title="CIF API", version="0.1.0")
+
+app.add_middleware(TraceIDMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

@@ -40,6 +40,11 @@ class ResolvedSurface(BaseModel):
     status: str
     sections: list[dict[str, Any]]
     components: list[ResolvedComponent]
+    # LIC — Loop Integrity Contract fields
+    cycle_id: str | None = None
+    trace_id: str | None = None
+    produced_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    producer: str = "CIF"
 
 
 class SurfaceOut(BaseModel):
@@ -50,5 +55,7 @@ class SurfaceOut(BaseModel):
     type: str
     status: str
     created_at: datetime
+    produced_by: str = "CIF"
+    schema_version: str = "1.0.0"
 
     model_config = {"from_attributes": True}

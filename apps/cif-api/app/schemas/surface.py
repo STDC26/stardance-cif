@@ -36,6 +36,20 @@ class ResolvedComponent(BaseModel):
     config: dict[str, Any]
 
 
+class OperatorVisibility(BaseModel):
+    """
+    SVS — State Visible Surface.
+    Operator sees decision usability signals only.
+    Internal scoring stays internal.
+
+    DRJ ruling P2-G4: Expose decision usability signals only.
+    Excluded: full HCTS scores, raw scoring vectors, internal decision detail.
+    """
+    pla_band: str
+    confidence_sufficient: bool
+    review_required: bool
+
+
 class ResolvedSurface(BaseModel):
     surface_id: str
     surface_version_id: str
@@ -55,6 +69,8 @@ class ResolvedSurface(BaseModel):
     # IMS execution state — FORGE-owned (DRJ P2-G2)
     execution_state: ExecutionState = ExecutionState.IDLE
     recovery_owner: str = "FORGE"
+    # SVS operator surface — decision usability signals only (DRJ P2-G4)
+    operator_visibility: OperatorVisibility | None = None
 
 
 class SurfaceOut(BaseModel):

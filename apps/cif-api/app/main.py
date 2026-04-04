@@ -16,6 +16,9 @@ from app.api.insights import router as insights_router
 from app.api.copilot import router as copilot_router
 
 
+from app.middleware.tis import TISMiddleware
+
+
 class TraceIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         trace_id = request.headers.get("X-Trace-ID", str(uuid.uuid4()))
@@ -28,6 +31,7 @@ class TraceIDMiddleware(BaseHTTPMiddleware):
 app = FastAPI(title="CIF API", version="0.1.0")
 
 app.add_middleware(TraceIDMiddleware)
+app.add_middleware(TISMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

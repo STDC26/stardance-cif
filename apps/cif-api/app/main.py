@@ -17,6 +17,7 @@ from app.api.copilot import router as copilot_router
 
 
 from app.middleware.tis import TISMiddleware
+from app.routers.render import router as render_router
 
 
 class TraceIDMiddleware(BaseHTTPMiddleware):
@@ -70,6 +71,9 @@ app.include_router(copilot_router)
 
 # Internal routes — no auth, no /api/v1 prefix
 app.include_router(internal_router)
+
+# FORGE Executor integration surface — no /api/v1 prefix (direct contract)
+app.include_router(render_router)
 
 
 @app.get("/health")

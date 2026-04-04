@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.surface import Surface, SurfaceVersion, ReviewState
@@ -19,7 +22,7 @@ async def generate_unique_slug(db: AsyncSession, name: str) -> str:
         slug = f"{base}-{unique_suffix()}"
 
 
-async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> tuple[Surface | None, list[str]]:
+async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> Tuple[Optional[Surface], list]:
     errors = []
     for section in data.sections:
         for comp in section.components:
@@ -82,7 +85,7 @@ async def resolve_surface(
     trace_id: str,
     cast_id: str,
     cast_payload: CastPayload,
-) -> ResolvedSurface | None:
+) -> Optional[ResolvedSurface]:
     result = await db.execute(select(Surface).where(Surface.id == surface_id))
     surface = result.scalar_one_or_none()
     if not surface:

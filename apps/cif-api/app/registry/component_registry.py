@@ -1,6 +1,11 @@
 from typing import Any
 from app.models.component import ComponentType
 
+# TIS — Trait Integrity Standards (DRJ 2026-04-03)
+# Aligned to CIDE ETHICS_MIN = 45. Previous value of 50 created a 45-49 gap band.
+# FORGE logs TIS-F4 alert when ethics trait score < ETHICS_FLOOR_FORGE.
+ETHICS_FLOOR_FORGE = 45
+
 # Required fields per component type
 COMPONENT_SCHEMAS: dict[ComponentType, dict[str, Any]] = {
     ComponentType.hero: {

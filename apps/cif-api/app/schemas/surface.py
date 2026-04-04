@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 from app.models.surface import SurfaceStatus
 from app.models.component import ComponentType
+from app.schemas.cast_payload import CastPayload
 
 
 class ComponentConfigIn(BaseModel):
@@ -40,11 +41,15 @@ class ResolvedSurface(BaseModel):
     status: str
     sections: list[dict[str, Any]]
     components: list[ResolvedComponent]
-    # LIC — Loop Integrity Contract fields
-    cycle_id: str | None = None
-    trace_id: str | None = None
+    cast_payload: CastPayload                          # Required — no execution without this
+    # LIC — Loop Integrity Contract fields (all required — DRJ 2026-04-03)
+    cycle_id: str
+    trace_id: str
+    cast_id: str
     produced_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
-    producer: str = "CIF"
+    # Attribution split — CIF renders, FORGE executes (FQ-5 DRJ 2026-04-03)
+    rendered_by: str = "CIF"
+    executed_by: str | None = None
 
 
 class SurfaceOut(BaseModel):

@@ -3,6 +3,7 @@ from sqlalchemy import select
 from app.models.surface import Surface, SurfaceVersion, ReviewState
 from app.models.component import Component, SurfaceComponent
 from app.schemas.surface import SurfaceCreateIn, ResolvedSurface, ResolvedComponent
+from app.schemas.cast_payload import CastPayload, DecisionExplanationSummary
 from app.registry.component_registry import validate_component_config
 from app.core.slugify import slugify, unique_suffix
 import uuid
@@ -74,7 +75,14 @@ async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> tuple[Surfa
     return surface, []
 
 
-async def resolve_surface(db: AsyncSession, surface_id: uuid.UUID) -> ResolvedSurface | None:
+async def resolve_surface(
+    db: AsyncSession,
+    surface_id: uuid.UUID,
+    cycle_id: str,
+    trace_id: str,
+    cast_id: str,
+    cast_payload: CastPayload,
+) -> ResolvedSurface | None:
     result = await db.execute(select(Surface).where(Surface.id == surface_id))
     surface = result.scalar_one_or_none()
     if not surface:
@@ -123,5 +131,9 @@ async def resolve_surface(db: AsyncSession, surface_id: uuid.UUID) -> ResolvedSu
         name=surface.name,
         status=surface.status,
         sections=sections,
-        components=resolved_components
+        components=resolved_components,
+        cast_payload=cast_payload,
+        cycle_id=cycle_id,
+        trace_id=trace_id,
+        cast_id=cast_id,
     )

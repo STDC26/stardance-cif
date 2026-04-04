@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.schemas.surface import SurfaceCreateIn, SurfaceOut, ResolvedSurface
+from app.schemas.cast_payload import CastPayload, DecisionExplanationSummary
 from app.services.surface_service import create_surface, resolve_surface
 from app.models.surface import Surface, SurfaceVersion
 from app.db.session import get_db
@@ -38,16 +39,30 @@ async def resolve_surface_endpoint(
     request: Request,
     x_cycle_id: str = Header(..., alias="X-Cycle-ID"),
     x_cast_id: str = Header(..., alias="X-Cast-ID"),
+    x_pla_band: str = Header(..., alias="X-PLA-Band"),
     db: AsyncSession = Depends(get_db),
     api_key: str = Depends(require_api_key),
 ):
     trace_id: str = getattr(request.state, "trace_id", str(uuid.uuid4()))
+    cast_payload = CastPayload(
+        cast_id=x_cast_id,
+        cycle_id=x_cycle_id,
+        trace_id=trace_id,
+        pla_band=x_pla_band,
+        decision_explanation_summary=DecisionExplanationSummary(
+            primary_reason="CAST-routed execution",
+            pla_band=x_pla_band,
+            confidence_sufficient=True,
+            review_required=False,
+        ),
+    )
     resolved = await resolve_surface(
         db,
         surface_id,
         cycle_id=x_cycle_id,
         trace_id=trace_id,
         cast_id=x_cast_id,
+        cast_payload=cast_payload,
     )
     if not resolved:
         raise HTTPException(status_code=404, detail="Surface not found")

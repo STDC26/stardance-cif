@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 from app.models.surface import SurfaceStatus
 from app.models.component import ComponentType
+from app.schemas.cast_payload import CastPayload
 
 
 class ComponentConfigIn(BaseModel):
@@ -40,6 +41,7 @@ class ResolvedSurface(BaseModel):
     status: str
     sections: list[dict[str, Any]]
     components: list[ResolvedComponent]
+    cast_payload: CastPayload                          # Required — no execution without this
     # LIC — Loop Integrity Contract fields (all required — DRJ 2026-04-03)
     cycle_id: str
     trace_id: str

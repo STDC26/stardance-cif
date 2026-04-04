@@ -1,5 +1,7 @@
+from __future__ import annotations
 import uuid
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import String, DateTime, func, ForeignKey, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -32,10 +34,10 @@ class Deployment(Base):
     status: Mapped[DeploymentStatus] = mapped_column(
         SAEnum(DeploymentStatus, name="deploymentstatus"), nullable=False, default=DeploymentStatus.pending
     )
-    deployed_by: Mapped[str | None] = mapped_column(String(255))
+    deployed_by: Mapped[Optional[str]] = mapped_column(String(255))
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deployed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    deactivated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     surface: Mapped["Surface"] = relationship(back_populates="deployments")

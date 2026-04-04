@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
@@ -5,6 +6,7 @@ from typing import Any
 from app.models.surface import SurfaceStatus
 from app.models.component import ComponentType
 from app.schemas.cast_payload import CastPayload
+from app.services.execution_state import ExecutionState
 
 
 class ComponentConfigIn(BaseModel):
@@ -34,6 +36,20 @@ class ResolvedComponent(BaseModel):
     config: dict[str, Any]
 
 
+class OperatorVisibility(BaseModel):
+    """
+    SVS — State Visible Surface.
+    Operator sees decision usability signals only.
+    Internal scoring stays internal.
+
+    DRJ ruling P2-G4: Expose decision usability signals only.
+    Excluded: full HCTS scores, raw scoring vectors, internal decision detail.
+    """
+    pla_band: str
+    confidence_sufficient: bool
+    review_required: bool
+
+
 class ResolvedSurface(BaseModel):
     surface_id: str
     surface_version_id: str
@@ -50,6 +66,11 @@ class ResolvedSurface(BaseModel):
     # Attribution split — CIF renders, FORGE executes (FQ-5 DRJ 2026-04-03)
     rendered_by: str = "CIF"
     executed_by: str | None = None
+    # IMS execution state — FORGE-owned (DRJ P2-G2)
+    execution_state: ExecutionState = ExecutionState.IDLE
+    recovery_owner: str = "FORGE"
+    # SVS operator surface — decision usability signals only (DRJ P2-G4)
+    operator_visibility: OperatorVisibility | None = None
 
 
 class SurfaceOut(BaseModel):

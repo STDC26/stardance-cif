@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.schemas.surface import SurfaceCreateIn, SurfaceOut, ResolvedSurface
@@ -35,10 +35,20 @@ async def create_surface_endpoint(
 @router.get("/{surface_id}/resolve", response_model=ResolvedSurface)
 async def resolve_surface_endpoint(
     surface_id: uuid.UUID,
+    request: Request,
+    x_cycle_id: str = Header(..., alias="X-Cycle-ID"),
+    x_cast_id: str = Header(..., alias="X-Cast-ID"),
     db: AsyncSession = Depends(get_db),
     api_key: str = Depends(require_api_key),
 ):
-    resolved = await resolve_surface(db, surface_id)
+    trace_id: str = getattr(request.state, "trace_id", str(uuid.uuid4()))
+    resolved = await resolve_surface(
+        db,
+        surface_id,
+        cycle_id=x_cycle_id,
+        trace_id=trace_id,
+        cast_id=x_cast_id,
+    )
     if not resolved:
         raise HTTPException(status_code=404, detail="Surface not found")
     return resolved

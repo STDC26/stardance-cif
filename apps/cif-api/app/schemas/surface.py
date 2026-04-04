@@ -6,6 +6,7 @@ from typing import Any
 from app.models.surface import SurfaceStatus
 from app.models.component import ComponentType
 from app.schemas.cast_payload import CastPayload
+from app.services.execution_state import ExecutionState
 
 
 class ComponentConfigIn(BaseModel):
@@ -51,6 +52,9 @@ class ResolvedSurface(BaseModel):
     # Attribution split — CIF renders, FORGE executes (FQ-5 DRJ 2026-04-03)
     rendered_by: str = "CIF"
     executed_by: str | None = None
+    # IMS execution state — FORGE-owned (DRJ P2-G2)
+    execution_state: ExecutionState = ExecutionState.IDLE
+    recovery_owner: str = "FORGE"
 
 
 class SurfaceOut(BaseModel):

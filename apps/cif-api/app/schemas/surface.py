@@ -2,7 +2,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 from app.models.surface import SurfaceStatus
 from app.models.component import ComponentType
 from app.schemas.cast_payload import CastPayload
@@ -57,11 +57,11 @@ class ResolvedSurface(BaseModel):
     status: str
     sections: list[dict[str, Any]]
     components: list[ResolvedComponent]
-    cast_payload: CastPayload                          # Required — no execution without this
-    # LIC — Loop Integrity Contract fields (all required — DRJ 2026-04-03)
-    cycle_id: str
-    trace_id: str
-    cast_id: str
+    cast_payload: Optional[CastPayload] = None         # None on public serve; required for FORGE execution
+    # LIC — Loop Integrity Contract fields (required for FORGE execution path — DRJ 2026-04-03)
+    cycle_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    cast_id: Optional[str] = None
     produced_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
     # Attribution split — CIF renders, FORGE executes (FQ-5 DRJ 2026-04-03)
     rendered_by: str = "CIF"

@@ -81,10 +81,10 @@ async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> Tuple[Optio
 async def resolve_surface(
     db: AsyncSession,
     surface_id: uuid.UUID,
-    cycle_id: str,
-    trace_id: str,
-    cast_id: str,
-    cast_payload: CastPayload,
+    cycle_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    cast_id: Optional[str] = None,
+    cast_payload: Optional[CastPayload] = None,
 ) -> Optional[ResolvedSurface]:
     result = await db.execute(select(Surface).where(Surface.id == surface_id))
     surface = result.scalar_one_or_none()

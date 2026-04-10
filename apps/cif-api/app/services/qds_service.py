@@ -27,12 +27,17 @@ async def create_qds_asset(data: QDSCreateIn, db: AsyncSession) -> dict:
     db.add(flow)
     await db.flush()
 
+    _STEP_TYPE_NORM = {
+        "single_choice": "single_select",
+        "multiple_choice": "multi_select",
+    }
+
     # Create steps
     step_objects = []
     for step_in in data.steps:
         step = QDSStep(
             flow_id=flow.id,
-            step_type=step_in.step_type,
+            step_type=_STEP_TYPE_NORM.get(step_in.step_type, step_in.step_type),
             title=step_in.title,
             prompt=step_in.prompt,
             options=[o.model_dump() for o in step_in.options] if step_in.options else None,
@@ -46,6 +51,7 @@ async def create_qds_asset(data: QDSCreateIn, db: AsyncSession) -> dict:
     # Set entry step
     if step_objects:
         flow.entry_step_id = step_objects[0].id
+    await db.flush()
 
     # Create outcomes
     outcome_objects = []

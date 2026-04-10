@@ -75,7 +75,7 @@ async def create_surface(db: AsyncSession, data: SurfaceCreateIn) -> Tuple[Optio
 
     await db.commit()
     await db.refresh(surface)
-    return surface, []
+    return surface, version
 
 
 async def resolve_surface(

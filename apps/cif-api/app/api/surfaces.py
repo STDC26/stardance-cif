@@ -27,10 +27,19 @@ async def create_surface_endpoint(
     db: AsyncSession = Depends(get_db),
     api_key: str = Depends(require_api_key),
 ):
-    surface, errors = await create_surface(db, data)
-    if errors:
-        raise HTTPException(status_code=422, detail=errors)
-    return surface
+    surface, result = await create_surface(db, data)
+    if surface is None:
+        raise HTTPException(status_code=422, detail=result)
+    return SurfaceOut(
+        id=surface.id,
+        current_version_id=result.id,
+        name=surface.name,
+        slug=surface.slug,
+        description=surface.description,
+        type=surface.type,
+        status=surface.status,
+        created_at=surface.created_at,
+    )
 
 
 @router.get("/{surface_id}/resolve", response_model=ResolvedSurface)

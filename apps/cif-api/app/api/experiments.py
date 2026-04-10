@@ -20,6 +20,8 @@ class ExperimentCreateIn(BaseModel):
     asset_id: str
     asset_type: str
     experiment_name: str
+    hypothesis: str | None = None
+    primary_metric: str | None = None
     goal_metric: Optional[str] = None
 
 
@@ -52,7 +54,7 @@ async def create_experiment_route(
         asset_id=body.asset_id,
         asset_type=body.asset_type,
         experiment_name=body.experiment_name,
-        goal_metric=body.goal_metric,
+        goal_metric=body.goal_metric or body.primary_metric or body.hypothesis,
     )
     return {
         "id": str(exp.id),

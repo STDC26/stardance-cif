@@ -65,7 +65,7 @@ async def check_remote_health() -> dict:
     """Verifies stardance-llm-service is reachable."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{STARDANCE_LLM_SERVICE_URL}/health")
+            resp = await client.get(f"{STARDANCE_LLM_SERVICE_URL}/v1/llm/health")
         return {
             "status": "ok" if resp.status_code == 200 else "error",
             "http_code": resp.status_code,

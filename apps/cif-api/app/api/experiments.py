@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -5,6 +6,8 @@ from typing import Optional
 from pydantic import BaseModel
 from app.db.session import get_db
 from app.core.auth import require_api_key
+
+logger = logging.getLogger(__name__)
 from app.models.experiment import (
     Experiment, ExperimentVariant, ExperimentAssignment
 )
@@ -49,13 +52,17 @@ async def create_experiment_route(
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_api_key),
 ):
-    exp = await create_experiment(
-        db,
-        asset_id=body.asset_id,
-        asset_type=body.asset_type,
-        experiment_name=body.experiment_name,
-        goal_metric=body.goal_metric or body.primary_metric or body.hypothesis,
-    )
+    try:
+        exp = await create_experiment(
+            db,
+            asset_id=body.asset_id,
+            asset_type=body.asset_type,
+            experiment_name=body.experiment_name,
+            goal_metric=body.goal_metric or body.primary_metric or body.hypothesis,
+        )
+    except Exception as exc:
+        logger.error("create_experiment failed: %s", exc, exc_info=True)
+        raise
     return {
         "id": str(exp.id),
         "experiment_id": exp.experiment_id,

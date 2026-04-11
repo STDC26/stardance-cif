@@ -34,7 +34,7 @@ async def call_external(
     payload: dict[str, Any] = {
         "calling_system": "CIF",
         "task_type": llm_task_type,
-        "prompt_id": f"cif.{task_type}",
+        "prompt_id": "cif.copilot",
         "payload": {
             "prompt": prompt,
             "max_tokens": 1024,

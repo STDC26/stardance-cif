@@ -78,5 +78,5 @@ CIF_TO_LLM_TASK_MAP: dict[str, str] = {
     "narrate": "specification_generation",
     "insight": "trait_mapping",
     "recommend": "structured_extraction",
-    "explain": "validation",
+    "explain": "specification_generation",
 }

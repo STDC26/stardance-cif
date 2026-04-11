@@ -6,7 +6,6 @@ No direct Anthropic API calls. Platform rule enforced.
 """
 
 import logging
-import uuid
 from typing import Any, Optional
 
 import httpx
@@ -35,7 +34,7 @@ async def call_external(
     payload: dict[str, Any] = {
         "calling_system": "CIF",
         "task_type": llm_task_type,
-        "prompt_id": uuid.uuid4().hex,
+        "prompt_id": f"cif.{task_type}",
         "payload": {
             "prompt": prompt,
             "max_tokens": 1024,

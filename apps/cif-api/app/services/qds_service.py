@@ -140,6 +140,8 @@ async def resolve_qds(asset_id: uuid.UUID, db: AsyncSession) -> dict:
         select(QDSFlow).where(QDSFlow.version_id == version.id)
     )
     flow = result.scalar_one_or_none()
+    if not flow:
+        return None
 
     result = await db.execute(
         select(QDSStep).where(QDSStep.flow_id == flow.id).order_by(QDSStep.position)

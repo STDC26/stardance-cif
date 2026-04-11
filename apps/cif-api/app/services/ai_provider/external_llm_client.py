@@ -33,13 +33,12 @@ async def call_external(
     llm_task_type = CIF_TO_LLM_TASK_MAP.get(task_type, "specification_generation")
 
     payload: dict[str, Any] = {
-        "call_id": str(uuid.uuid4()),
         "calling_system": "CIF",
         "task_type": llm_task_type,
-        "prompt_id": f"cif.{task_type}",
+        "prompt_id": uuid.uuid4().hex,
         "payload": {
             "prompt": prompt,
-            "system": system or "",
+            "max_tokens": 1024,
         },
         "high_stakes_flag": False,
         "cache_eligible": True,

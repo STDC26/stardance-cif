@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.deployment_service import get_active_deployment
@@ -9,13 +9,15 @@ router = APIRouter(tags=["public"])
 
 
 @router.get("/s/{slug}")
-async def serve_surface(slug: str, db: AsyncSession = Depends(get_db)):
+async def serve_surface(slug: str, response: Response, db: AsyncSession = Depends(get_db)):
     version, deployment = await get_active_deployment(db, slug, DeploymentEnvironment.production)
     if not version:
         raise HTTPException(status_code=404, detail="No active production deployment for this surface")
     resolved = await resolve_surface(db, version.surface_id)
     if not resolved:
         raise HTTPException(status_code=404, detail="Surface not found")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    response.headers["Surrogate-Control"] = "max-age=3600"
     return {
         **resolved.model_dump(),
         "deployment_id": str(deployment.id),
@@ -57,7 +59,7 @@ from app.services.qds_deployment_service import get_active_qds_version
 
 
 @router.get("/q/{slug}")
-async def get_public_qds(slug: str, db: AsyncSession = Depends(get_db)):
+async def get_public_qds(slug: str, response: Response, db: AsyncSession = Depends(get_db)):
     """
     Resolve a QDS by slug and return its active production deployment.
     No auth required — this is the public runtime entry point.
@@ -97,6 +99,8 @@ async def get_public_qds(slug: str, db: AsyncSession = Depends(get_db)):
     )
     outcomes = result.scalars().all()
 
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    response.headers["Surrogate-Control"] = "max-age=3600"
     return {
         "asset_id": str(asset.id),
         "asset_name": asset.name,

@@ -36,7 +36,13 @@ app.add_middleware(TISMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://base-ui-seven.vercel.app", "https://base-ui.vercel.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://base-ui-seven.vercel.app",
+        "https://base-ui.vercel.app",
+        "https://sd-chubs-renderer.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

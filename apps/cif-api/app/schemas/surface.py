@@ -36,8 +36,14 @@ class SurfaceCreateIn(BaseModel):
     cqx_intensity: CQXIntensity | None = None
 
 
+class SequencingComponentIn(BaseModel):
+    component_type: ComponentType
+    cqx_stage: CQXStage | None = None
+    cqx_intensity: CQXIntensity | None = None
+
+
 class SurfaceSequenceIn(BaseModel):
-    components: list[ComponentConfigIn]
+    components: list[SequencingComponentIn]
     scss_position: SCSSPosition = "entry"
     hcts_target_profile: dict | None = None
     cqx_intensity: CQXIntensity = "medium"

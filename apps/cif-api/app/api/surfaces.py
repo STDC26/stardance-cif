@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.schemas.surface import SurfaceCreateIn, SurfaceOut, ResolvedSurface
+from app.schemas.surface import SurfaceCreateIn, SurfaceOut, SurfaceSequenceIn, ResolvedSurface
 from app.schemas.cast_payload import CastPayload, DecisionExplanationSummary
 from app.services.surface_service import create_surface, resolve_surface
+from app.services.cqx_sequencing_engine import sequence_surface
 from app.models.surface import Surface, SurfaceVersion
 from app.db.session import get_db
 from app.core.auth import require_api_key
@@ -30,6 +31,27 @@ async def create_surface_endpoint(
     surface, result = await create_surface(db, data)
     if surface is None:
         raise HTTPException(status_code=422, detail=result)
+
+    cqx_sequencing = None
+    if data.hcts_target_profile or data.scss_position:
+        components = [
+            c.model_dump()
+            for section in (data.sections or [])
+            for c in section.components
+        ]
+        seq = sequence_surface(
+            hcts_profile=data.hcts_target_profile or {},
+            scss_position=data.scss_position or "entry",
+            cqx_intensity=data.cqx_intensity or "medium",
+            components=components,
+        )
+        cqx_sequencing = {
+            "conviction_expectation": seq.conviction_expectation,
+            "stage_coverage": seq.stage_coverage,
+            "validation": seq.validation,
+            "failure_reason": seq.failure_reason,
+        }
+
     return SurfaceOut(
         id=surface.id,
         current_version_id=result.id,
@@ -39,7 +61,23 @@ async def create_surface_endpoint(
         type=surface.type,
         status=surface.status,
         created_at=surface.created_at,
+        cqx_sequencing=cqx_sequencing,
     )
+
+
+@router.post("/sequence")
+async def sequence_surface_endpoint(
+    data: SurfaceSequenceIn,
+    api_key: str = Depends(require_api_key),
+):
+    components = [c.model_dump() for c in data.components]
+    result = sequence_surface(
+        hcts_profile=data.hcts_target_profile or {},
+        scss_position=data.scss_position,
+        cqx_intensity=data.cqx_intensity,
+        components=components,
+    )
+    return result.to_dict()
 
 
 @router.get("/{surface_id}/resolve", response_model=ResolvedSurface)

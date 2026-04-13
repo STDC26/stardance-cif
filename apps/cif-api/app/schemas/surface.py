@@ -2,17 +2,23 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from app.models.surface import SurfaceStatus
 from app.models.component import ComponentType
 from app.schemas.cast_payload import CastPayload
 from app.services.execution_state import ExecutionState
+
+CQXStage = Literal["context", "outcome", "direction", "conviction", "action"]
+CQXIntensity = Literal["low", "medium", "high"]
+SCSSPosition = Literal["entry", "mid_funnel", "destination"]
 
 
 class ComponentConfigIn(BaseModel):
     component_type: ComponentType
     name: str
     config: dict[str, Any] = Field(default_factory=dict)
+    cqx_stage: CQXStage | None = None
+    cqx_intensity: CQXIntensity | None = None
 
 
 class SectionIn(BaseModel):
@@ -25,6 +31,16 @@ class SurfaceCreateIn(BaseModel):
     description: str | None = None
     type: str
     sections: list[SectionIn] = Field(default_factory=list)
+    scss_position: SCSSPosition | None = None
+    hcts_target_profile: dict | None = None
+    cqx_intensity: CQXIntensity | None = None
+
+
+class SurfaceSequenceIn(BaseModel):
+    components: list[ComponentConfigIn]
+    scss_position: SCSSPosition = "entry"
+    hcts_target_profile: dict | None = None
+    cqx_intensity: CQXIntensity = "medium"
 
 
 class ResolvedComponent(BaseModel):
@@ -84,5 +100,6 @@ class SurfaceOut(BaseModel):
     created_at: datetime
     produced_by: str = "CIF"
     schema_version: str = "1.0.0"
+    cqx_sequencing: dict | None = None
 
     model_config = {"from_attributes": True}

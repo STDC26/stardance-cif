@@ -13,6 +13,7 @@ import httpx
 from app.services.ai_provider.routing_policy import (
     STARDANCE_LLM_SERVICE_URL,
     CIF_TO_LLM_TASK_MAP,
+    PROMPT_ID_MAP,
     ANTHROPIC_TIMEOUT,
 )
 
@@ -30,11 +31,12 @@ async def call_external(
     Raises httpx.HTTPError on service failure.
     """
     llm_task_type = CIF_TO_LLM_TASK_MAP.get(task_type, "specification_generation")
+    prompt_id = PROMPT_ID_MAP.get(task_type, "cif.copilot")
 
     payload: dict[str, Any] = {
         "calling_system": "CIF",
         "task_type": llm_task_type,
-        "prompt_id": "cif.copilot",
+        "prompt_id": prompt_id,
         "payload": {
             "prompt": prompt,
             "max_tokens": 1024,

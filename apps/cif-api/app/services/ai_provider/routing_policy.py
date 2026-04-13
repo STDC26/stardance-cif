@@ -74,9 +74,31 @@ ANTHROPIC_TIMEOUT = float(os.getenv("ANTHROPIC_TIMEOUT", "120.0"))
 STARDANCE_LLM_SERVICE_URL = os.getenv("STARDANCE_LLM_SERVICE_URL", "http://localhost:8003")
 
 CIF_TO_LLM_TASK_MAP: dict[str, str] = {
-    "advanced_reasoning": "specification_generation",
-    "narrate": "specification_generation",
-    "insight": "trait_mapping",
-    "recommend": "structured_extraction",
-    "explain": "specification_generation",
+    "asset_draft":          "specification_generation",
+    "summarize":            "structured_extraction",
+    "insight":              "specification_generation",
+    "signal_summary":       "specification_generation",
+    "experiment_summary":   "specification_generation",
+    "classify":             "specification_generation",
+    "extract":              "structured_extraction",
+    "recommend":            "specification_generation",
+    "narrate":              "specification_generation",
+    "operator_assistant":   "specification_generation",
+    "advanced_reasoning":   "specification_generation",
+    "explain":              "specification_generation",
+}
+
+PROMPT_ID_MAP: dict[str, str] = {
+    "asset_draft":          "cif.copilot",
+    "summarize":            "cif.asset-insight",
+    "insight":              "cif.asset-insight",
+    "signal_summary":       "cif.signal-insight",
+    "experiment_summary":   "cif.experiment-insight",
+    "classify":             "cif.asset-insight",
+    "extract":              "cif.asset-insight",
+    "recommend":            "cif.experiment-recommend",
+    "narrate":              "cif.copilot",
+    "operator_assistant":   "cif.copilot",
+    "advanced_reasoning":   "cif.asset-insight",
+    "explain":              "cif.copilot",
 }

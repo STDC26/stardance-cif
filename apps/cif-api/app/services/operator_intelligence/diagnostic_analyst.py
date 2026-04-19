@@ -69,11 +69,17 @@ async def analyze_diagnostic(
             f"{context.get('signal_total_events', 0)}\n"
         )
 
-        total_sessions = context.get("qds_total_sessions", 0) or 0
-        completed_count = context.get("qds_completed_sessions", 0) or 0
+        def _coerce_int(value) -> int:
+            try:
+                return int(value) if value is not None else 0
+            except (TypeError, ValueError):
+                return 0
+
+        total_sessions = _coerce_int(context.get("qds_total_sessions"))
+        completed_count = _coerce_int(context.get("qds_completed_sessions"))
         drop_off_rate = (
-            round((1 - completed_count / total_sessions) * 100, 1)
-            if total_sessions else 0.0
+            round((total_sessions - completed_count) / total_sessions * 100, 1)
+            if total_sessions > 0 else 0.0
         )
         variables = {
             "asset_name": context.get("qds_name", "Unknown"),

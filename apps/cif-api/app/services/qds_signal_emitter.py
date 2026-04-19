@@ -90,6 +90,8 @@ async def emit_step_view(
     step_id: uuid.UUID,
     step_type: str,
     step_title: str,
+    step_position: int | None = None,
+    journey_id: str | None = None,
 ) -> None:
     await emit(
         db=db,
@@ -102,6 +104,8 @@ async def emit_step_view(
         metadata={
             "step_type": step_type,
             "step_title": step_title,
+            "step_position": step_position,
+            "journey_id": journey_id,
         },
     )
 
@@ -116,6 +120,8 @@ async def emit_answer_submitted(
     answer_value: any,
     score_contribution: float,
     cumulative_score: float,
+    step_position: int | None = None,
+    journey_id: str | None = None,
 ) -> None:
     await emit(
         db=db,
@@ -129,6 +135,8 @@ async def emit_answer_submitted(
             "answer_value": answer_value if isinstance(answer_value, (str, int, float, list)) else str(answer_value),
             "score_contribution": score_contribution,
             "cumulative_score": cumulative_score,
+            "step_position": step_position,
+            "journey_id": journey_id,
         },
     )
 
@@ -196,6 +204,8 @@ async def emit_qualification_result(
     qualification_status: str,
     score: float,
     routing_target: str | None,
+    outcome_label: str | None = None,
+    journey_id: str | None = None,
 ) -> None:
     await emit(
         db=db,
@@ -206,8 +216,11 @@ async def emit_qualification_result(
         session_key=session_key,
         metadata={
             "outcome_id": str(outcome_id),
+            "outcome_label": outcome_label,
             "qualification_status": qualification_status,
             "score": score,
+            "cumulative_score": score,
             "routing_target": routing_target,
+            "journey_id": journey_id,
         },
     )

@@ -100,11 +100,28 @@ async def analyze_asset(
                 f"{context.get('qds_total_sessions', 0)}\n"
             )
 
+        total_events = context.get("signal_total_events", 0) or 0
+        deployed_version = context.get("asset_deployed_version") or ""
+        is_deployed = bool(deployed_version)
+        variables = {
+            "asset_name": asset_name,
+            "asset_type": asset_type,
+            "asset_status": str(context.get("asset_status", "")),
+            "version_count": str(context.get("asset_version_count", 0) or 0),
+            "deployed_version": str(deployed_version),
+            "total_events": str(total_events),
+            "performance_summary": (
+                f"total_signals: {total_events}, "
+                f"deployed: {is_deployed}"
+            ),
+        }
+
         result = await generate(
             task_type=AITaskType.OPERATOR_ASSISTANT,
             prompt=prompt,
             context=context,
             system=ASSET_SYSTEM_PROMPT,
+            variables=variables,
         )
 
         return {

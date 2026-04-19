@@ -59,6 +59,7 @@ async def generate(
     context: Optional[dict[str, Any]] = None,
     system: Optional[str] = None,
     force_provider: Optional[AIProvider] = None,
+    variables: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """
     Routes an inference request to the appropriate provider.
@@ -70,6 +71,10 @@ async def generate(
                         Retrieval Layer grounding.
         system:         Optional system instruction override.
         force_provider: Override routing policy. Use sparingly.
+        variables:      Optional template-variable dict. When set and the
+                        call goes remote, these keys form the inner payload
+                        sent to sd-llm-service so the registered prompt
+                        template can substitute them.
 
     Returns:
         dict with keys: provider, model, response, latency_ms,
@@ -102,7 +107,11 @@ async def generate(
                 task_type.value, str(e),
             )
             try:
-                response = await call_external(full_prompt, system)
+                response = await call_external(
+                    full_prompt, system,
+                    task_type=task_type.value,
+                    variables=variables,
+                )
                 latency_ms = int((time.monotonic() - start) * 1000)
                 return {
                     "provider": AIProvider.REMOTE.value,
@@ -131,7 +140,11 @@ async def generate(
 
     else:
         try:
-            response = await call_external(full_prompt, system)
+            response = await call_external(
+                full_prompt, system,
+                task_type=task_type.value,
+                variables=variables,
+            )
             latency_ms = int((time.monotonic() - start) * 1000)
             return {
                 "provider": AIProvider.REMOTE.value,

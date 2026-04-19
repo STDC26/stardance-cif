@@ -114,6 +114,8 @@ async def start_session(
             step_id=flow.entry_step_id,
             step_type=entry_step.step_type if isinstance(entry_step.step_type, str) else entry_step.step_type.value,
             step_title=entry_step.title,
+            step_position=entry_step.position,
+            journey_id=(device_metadata or {}).get("journey_id") if device_metadata else None,
         )
 
     await db.commit()
@@ -223,6 +225,8 @@ async def submit_answer(
         answer_value=answer_value,
         score_contribution=score,
         cumulative_score=session.cumulative_score,
+        step_position=step.position,
+        journey_id=session.device_metadata.get("journey_id") if session.device_metadata else None,
     )
 
     # Emit branch_selected if a transition fired
@@ -262,6 +266,8 @@ async def submit_answer(
                 step_id=next_step_id,
                 step_type=next_step.step_type if isinstance(next_step.step_type, str) else next_step.step_type.value,
                 step_title=next_step.title,
+                step_position=next_step.position,
+                journey_id=session.device_metadata.get("journey_id") if session.device_metadata else None,
             )
     else:
         # No transition defined — auto-advance to score-based outcome
@@ -312,6 +318,8 @@ async def submit_answer(
                 qualification_status=qs if isinstance(qs, str) else qs.value,
                 score=session.cumulative_score,
                 routing_target=resolved_outcome.routing_target,
+                outcome_label=resolved_outcome.label,
+                journey_id=session.device_metadata.get("journey_id") if session.device_metadata else None,
             )
 
     await db.commit()

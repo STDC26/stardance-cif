@@ -64,11 +64,24 @@ async def interpret_signals(
                 metric_name = k.replace("metric_", "").replace("_", ".")
                 prompt += f"Metric {metric_name}: {v}\n"
 
+        total_events = context.get("signal_total_events", 0) or 0
+        aggregate_count = context.get("signal_aggregate_count", 0) or 0
+        variables = {
+            "asset_name": context.get("asset_name", ""),
+            "total_events": str(total_events),
+            "event_breakdown": (
+                f"total_events: {total_events}, "
+                f"aggregate_count: {aggregate_count}"
+            ),
+            "time_period": "last 30 days",
+        }
+
         result = await generate(
             task_type=AITaskType.SIGNAL_SUMMARY,
             prompt=prompt,
             context=context,
             system=SIGNAL_SYSTEM_PROMPT,
+            variables=variables,
         )
 
         return {

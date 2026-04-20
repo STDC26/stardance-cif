@@ -15,6 +15,7 @@ from app.api.retrieval import router as retrieval_router
 from app.api.insights import router as insights_router
 from app.api.copilot import router as copilot_router
 from app.api.preview import router as preview_router
+from app.api.a2_pipeline import router as a2_pipeline_router
 
 
 from app.middleware.tis import TISMiddleware
@@ -79,6 +80,10 @@ app.include_router(copilot_router)
 # Preview + Review — has own /api/v1 prefix. POST / requires API key;
 # GET and POST /{preview_id}/review are token-gated, no API key.
 app.include_router(preview_router)
+
+# A2 → FORGE pipeline (TCE-11) — has own /api/v1 prefix. Requires API key.
+# Routes through public A2 URL (Option B) — see app/services/a2_client.py.
+app.include_router(a2_pipeline_router)
 
 # Internal routes — no auth, no /api/v1 prefix
 app.include_router(internal_router)

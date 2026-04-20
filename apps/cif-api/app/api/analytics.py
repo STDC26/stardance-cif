@@ -134,28 +134,183 @@ async def get_qds_analytics(
 
 @router.get("/surfaces")
 async def get_surface_analytics(
-    metric_name: Optional[str] = Query(None),
-    window_type: Optional[str] = Query("daily"),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_api_key),
 ):
-    """Returns aggregated metrics for all Conversion Surface assets."""
-    conditions = [
-        SignalAggregate.asset_type == "conversion_surface",
-        SignalAggregate.experiment_id == None,
-    ]
-    if metric_name:
-        conditions.append(SignalAggregate.metric_name == metric_name)
-    if window_type:
-        conditions.append(SignalAggregate.window_type == window_type)
+    """TCE-12 — live CQX analytics for every surface with at least one signal.
 
-    result = await db.execute(
-        select(SignalAggregate)
-        .where(and_(*conditions))
-        .order_by(SignalAggregate.computed_at.desc())
+    Queries ``signal_events`` directly; no dependency on the aggregation job.
+    Returns per-surface view/conversion/impression counts, CQX-stage
+    breakdown for component_impressions, and stage-to-stage drop-off.
+    """
+    rows = (await db.execute(text("""
+        SELECT
+            s.id                            AS surface_id,
+            s.slug                          AS slug,
+            s.name                          AS name,
+            COUNT(*) FILTER (WHERE se.event_type = 'surface_view')        AS total_views,
+            COUNT(*) FILTER (WHERE se.event_type = 'conversion')          AS total_conversions,
+            COUNT(*) FILTER (WHERE se.event_type = 'component_impression') AS total_impressions,
+            COUNT(se.id)                                                  AS total_signals,
+            MAX(se.created_at)              AS last_signal_at
+        FROM surfaces s
+        JOIN signal_events se ON se.surface_id = s.id
+        GROUP BY s.id, s.slug, s.name
+        ORDER BY last_signal_at DESC
+    """))).mappings().all()
+
+    out: list[dict] = []
+    for r in rows:
+        surface_id = r["surface_id"]
+
+        # CQX stage breakdown from component_impression event_data.
+        stage_rows = (await db.execute(text("""
+            SELECT
+                event_data->>'cqx_stage' AS cqx_stage,
+                COUNT(*)                 AS cnt
+            FROM signal_events
+            WHERE surface_id = :sid
+              AND event_type = 'component_impression'
+              AND event_data ? 'cqx_stage'
+              AND event_data->>'cqx_stage' IS NOT NULL
+            GROUP BY event_data->>'cqx_stage'
+        """), {"sid": surface_id})).mappings().all()
+        breakdown = {row["cqx_stage"]: int(row["cnt"]) for row in stage_rows}
+
+        # Stage-to-stage drop-off (percentage of the earlier stage lost).
+        def _drop(a: str, b: str) -> Optional[str]:
+            av, bv = breakdown.get(a, 0), breakdown.get(b, 0)
+            if av <= 0:
+                return None
+            pct = (av - bv) / av * 100
+            return f"{max(pct, 0):.1f}%"
+
+        drop_off = {
+            "context_to_outcome":      _drop("context", "outcome"),
+            "outcome_to_conviction":   _drop("outcome", "conviction"),
+            "conviction_to_direction": _drop("conviction", "direction"),
+            "direction_to_action":     _drop("direction", "action"),
+        }
+
+        views = int(r["total_views"] or 0)
+        convs = int(r["total_conversions"] or 0)
+        conv_rate = f"{(convs / views * 100):.1f}%" if views > 0 else "0.0%"
+
+        out.append({
+            "surface_id":          str(surface_id),
+            "slug":                r["slug"],
+            "surface_name":        r["name"],
+            "total_views":         views,
+            "total_conversions":   convs,
+            "conversion_rate":     conv_rate,
+            "total_impressions":   int(r["total_impressions"] or 0),
+            "total_signals":       int(r["total_signals"] or 0),
+            "cqx_stage_breakdown": breakdown,
+            "cqx_drop_off":        drop_off,
+            "last_signal_at": (
+                r["last_signal_at"].isoformat()
+                if r["last_signal_at"] else None
+            ),
+        })
+
+    return out
+
+
+@router.get("/qds/{slug}")
+async def get_qds_live_analytics(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_api_key),
+):
+    """TCE-12 — live per-QDS session analytics + per-step drop-off."""
+    # Resolve slug → QDS asset
+    asset_row = (await db.execute(text(
+        "SELECT id, name FROM qds_assets WHERE slug = :slug"
+    ), {"slug": slug})).mappings().first()
+    if asset_row is None:
+        raise HTTPException(status_code=404, detail=f"QDS not found: {slug}")
+    asset_id = asset_row["id"]
+
+    session_totals = (await db.execute(text("""
+        SELECT
+            COUNT(*)                                                  AS total,
+            COUNT(*) FILTER (WHERE status = 'completed')              AS completed,
+            AVG(EXTRACT(EPOCH FROM (completed_at - started_at)))
+              FILTER (WHERE status = 'completed' AND completed_at IS NOT NULL)
+                AS avg_completion_seconds
+        FROM qds_sessions
+        WHERE asset_id = :aid
+    """), {"aid": asset_id})).mappings().first()
+
+    total_sessions = int(session_totals["total"] or 0) if session_totals else 0
+    completed = int(session_totals["completed"] or 0) if session_totals else 0
+    avg_seconds = (
+        float(session_totals["avg_completion_seconds"])
+        if session_totals and session_totals["avg_completion_seconds"] is not None
+        else None
     )
-    rows = result.scalars().all()
-    return [_fmt_aggregate(r) for r in rows]
+    completion_rate = (
+        f"{(completed / total_sessions * 100):.1f}%"
+        if total_sessions > 0 else "0.0%"
+    )
+
+    # Per-step drop-off from answer_submitted signals.
+    step_rows = (await db.execute(text("""
+        SELECT
+            event_data->>'step_position' AS step_position,
+            COUNT(*)                     AS cnt
+        FROM signal_events
+        WHERE surface_id = :aid
+          AND event_type = 'answer_submitted'
+          AND event_data ? 'step_position'
+          AND event_data->>'step_position' IS NOT NULL
+        GROUP BY event_data->>'step_position'
+        ORDER BY step_position
+    """), {"aid": asset_id})).mappings().all()
+    step_drop_off = {row["step_position"]: int(row["cnt"]) for row in step_rows}
+
+    return {
+        "slug":                           slug,
+        "asset_id":                       str(asset_id),
+        "qds_name":                       asset_row["name"],
+        "total_sessions":                 total_sessions,
+        "completed_sessions":             completed,
+        "completion_rate":                completion_rate,
+        "avg_completion_time_seconds":    (
+            round(avg_seconds, 2) if avg_seconds is not None else None
+        ),
+        "step_drop_off":                  step_drop_off,
+    }
+
+
+@router.post("/aggregate")
+async def trigger_live_aggregate(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_api_key),
+):
+    """TCE-12 — manual-trigger counters over live signal_events data.
+
+    Returns how many surfaces have at least one signal and how many rows
+    currently sit in signal_events. No cache is written — this endpoint
+    exists as a trigger-shaped health check for future Railway cron.
+    """
+    import time as _time
+    start = _time.monotonic()
+
+    surfaces_row = (await db.execute(text("""
+        SELECT COUNT(DISTINCT s.id) AS cnt
+        FROM surfaces s
+        JOIN signal_events se ON se.surface_id = s.id
+    """))).mappings().first()
+    signals_row = (await db.execute(text(
+        "SELECT COUNT(*) AS cnt FROM signal_events"
+    ))).mappings().first()
+
+    return {
+        "surfaces_processed": int(surfaces_row["cnt"] or 0) if surfaces_row else 0,
+        "signals_processed":  int(signals_row["cnt"] or 0) if signals_row else 0,
+        "latency_ms":         int((_time.monotonic() - start) * 1000),
+    }
 
 
 # ── experiment analytics ──────────────────────────────────────────────────

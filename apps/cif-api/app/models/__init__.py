@@ -8,6 +8,7 @@ from app.models.experiment import (
 )
 from app.models.deployment import Deployment, DeploymentEnvironment, DeploymentStatus
 from app.models.signal import SignalEvent, EventType
+from app.models.preview import PreviewToken
 from app.models.qds import (  # noqa
     QDSAsset, QDSVersion, QDSFlow, QDSStep, QDSTransition,
     QDSOutcome, QDSScoringRule, QDSDeployment, QDSSession, QDSAnswer,
@@ -21,4 +22,5 @@ __all__ = [
     "SignalAggregate", "InsightReport",
     "Deployment", "DeploymentEnvironment", "DeploymentStatus",
     "SignalEvent", "EventType",
+    "PreviewToken",
 ]

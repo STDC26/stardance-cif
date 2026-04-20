@@ -100,6 +100,37 @@ def _build_test_underwrite_payload(brand_id: str, hcts_profile: dict) -> dict:
     }
 
 
+async def a2_underwrite_raw(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/a2/underwrite with a caller-supplied payload.
+
+    Used by the TCE-15 measured path where the stage profiler has already
+    produced a complete A2 input bundle. No synthesis, no scaling.
+    """
+    start = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=_A2_TIMEOUT) as client:
+            r = await client.post(
+                f"{settings.A2_SERVICE_URL}/v1/a2/underwrite",
+                json=payload,
+                headers=_headers(),
+            )
+            r.raise_for_status()
+            latency_ms = int((time.time() - start) * 1000)
+            body = r.json()
+            logger.info(
+                "a2_underwrite_raw_success latency_ms=%d decision=%s brand_id=%s",
+                latency_ms, body.get("decision"), payload.get("brand_id"),
+            )
+            return {**body, "_latency_ms": latency_ms, "_payload_sent": payload}
+    except Exception as e:
+        latency_ms = int((time.time() - start) * 1000)
+        logger.error(
+            "a2_underwrite_raw_error latency_ms=%d brand_id=%s error=%s",
+            latency_ms, payload.get("brand_id"), str(e),
+        )
+        raise
+
+
 async def a2_underwrite(brand_id: str, hcts_profile: dict) -> dict[str, Any]:
     """POST /v1/a2/underwrite — synthetic payload derived from CIF HCTS.
 

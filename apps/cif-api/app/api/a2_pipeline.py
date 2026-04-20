@@ -21,25 +21,29 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import json
+
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.copilot import SurfaceCreateBrief
 from app.core.auth import require_api_key
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.deployment import DeploymentEnvironment
 from app.models.preview import PreviewToken
 from app.models.signal import EventType, SignalEvent
 from app.models.surface import ReviewState
 from app.schemas.surface import ComponentConfigIn, SectionIn, SurfaceCreateIn
-from app.services.a2_client import a2_underwrite
+from app.services.a2_client import a2_underwrite, a2_underwrite_raw
 from app.services.cqx_sequencing_engine import sequence_surface
 from app.services.deployment_service import (
     deploy_surface as deploy_surface_service,
     transition_version_state,
 )
+from app.services.stage_profiler import build_stage_profiles
 from app.services.surface_service import create_surface as create_surface_service
 
 
@@ -335,6 +339,212 @@ async def a2_pipeline(
         "gate_blocked": gate_blocked,
         "block_reason": block_reason,
         "test_mode": True,
+        "a2_latency_ms": a2_latency_ms,
+        "pipeline_latency_ms": pipeline_latency_ms,
+    }
+
+
+# ── TCE-15 — real BASE → A2 pipeline ────────────────────────────────────────
+
+
+@router.post("/pipeline/measured")
+async def a2_pipeline_measured(
+    image_file: UploadFile = File(...),
+    video_file: UploadFile = File(...),
+    landing_page_file: UploadFile = File(...),
+    brand_id: str = Form(...),
+    sector: str = Form("BEAUTY_SKINCARE"),
+    brand_context: Optional[str] = Form(None),
+    surface_brief: Optional[str] = Form(None),
+    api_key: str = Depends(require_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Real BASE → A2 pipeline — replaces the synthetic test_mode path.
+
+    Three assets (image / video / landing_page) flow through BASE to
+    produce per-stage NinePDProfiles, then into A2 for the real decision.
+    """
+    pipeline_start = time.monotonic()
+
+    # 0. Read form inputs
+    image_bytes = await image_file.read()
+    video_bytes = await video_file.read()
+    lp_bytes = await landing_page_file.read()
+
+    try:
+        brand_ctx = json.loads(brand_context) if brand_context else {"brand_id": brand_id}
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_brand_context_json"},
+        )
+
+    try:
+        brief_obj: Optional[SurfaceCreateBrief] = (
+            SurfaceCreateBrief(**json.loads(surface_brief))
+            if surface_brief else None
+        )
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_surface_brief", "detail": str(e)},
+        )
+
+    # 1. BASE measurements — stage profiles + derived fields
+    try:
+        a2_inputs = await build_stage_profiles(
+            image_bytes, video_bytes, lp_bytes,
+            brand_ctx,
+            settings.BASE_API_KEY or None,
+        )
+    except TimeoutError as e:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "base_measurement_timeout", "detail": str(e)},
+        )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "base_measurement_failed",
+                "status": e.response.status_code if e.response else None,
+                "detail": e.response.text[:500] if e.response else str(e),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "base_measurement_failed", "detail": str(e)},
+        )
+
+    lineage = a2_inputs.pop("_lineage", {})
+
+    # 2. A2 underwrite with the measured payload
+    a2_payload = {
+        "brand_id": brand_id,
+        "sector": sector,
+        **a2_inputs,
+    }
+    try:
+        underwrite = await a2_underwrite_raw(a2_payload)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "a2_underwrite_failed",
+                "status": e.response.status_code if e.response else None,
+                "detail": e.response.text[:500] if e.response else str(e),
+                "brand_id": brand_id,
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "a2_underwrite_failed", "detail": str(e), "brand_id": brand_id},
+        )
+
+    decision: str = underwrite.get("decision", "NO_LAUNCH")
+    system_fit = underwrite.get("system_fit")
+    system_confidence = underwrite.get("system_confidence")
+    calibration_event_id = underwrite.get("calibration_event_id")
+    triggered_penalties = underwrite.get("triggered_penalties") or []
+    decision_rationale = underwrite.get("decision_rationale") or []
+    a2_latency_ms = underwrite.get("_latency_ms")
+
+    # 3. FORGE routing (mirrors /pipeline test_mode routing)
+    surface_created = False
+    slug: Optional[str] = None
+    surface_uuid: Optional[Any] = None
+    version_uuid: Optional[Any] = None
+    deployment_id: Optional[str] = None
+    preview_id: Optional[str] = None
+    preview_url: Optional[str] = None
+    gate_blocked = False
+    block_reason: Optional[str] = None
+
+    if decision in ("PAUSE_AND_DIAGNOSE", "NO_LAUNCH"):
+        gate_blocked = True
+        block_reason = (
+            decision_rationale[0] if decision_rationale
+            else f"A2 decision: {decision}"
+        )
+    elif decision == "AUTO_LAUNCH":
+        if brief_obj is not None:
+            surface, version = await _create_and_publish_surface(db, brief_obj, api_key)
+            deployment, err = await deploy_surface_service(
+                db, surface.id, version.id,
+                DeploymentEnvironment.production, api_key,
+            )
+            if deployment is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "deploy_failed", "failure_reason": err},
+                )
+            surface_created = True
+            slug = surface.slug
+            surface_uuid = surface.id
+            version_uuid = version.id
+            deployment_id = str(deployment.id)
+    elif decision == "HUMAN_REVIEW":
+        if brief_obj is not None:
+            surface, version = await _create_and_publish_surface(db, brief_obj, api_key)
+            preview_id, preview_url = _mint_preview(
+                db, surface.id, surface.slug, version.id, api_key,
+            )
+            surface_created = True
+            slug = surface.slug
+            surface_uuid = surface.id
+            version_uuid = version.id
+    else:
+        logger.warning("a2_pipeline_measured: unexpected decision=%r", decision)
+        gate_blocked = True
+        block_reason = f"Unknown A2 decision: {decision!r}"
+
+    # 4. Audit log with measurement lineage
+    _emit_pipeline_complete_signal(
+        db, surface_uuid, version_uuid,
+        {
+            "brand_id": brand_id,
+            "a2_decision": decision,
+            "system_fit": system_fit,
+            "system_confidence": system_confidence,
+            "surface_created": surface_created,
+            "slug": slug,
+            "test_mode": False,
+            "measurement_source": "BASE",
+            "calibration_event_id": calibration_event_id,
+            "triggered_penalties": triggered_penalties,
+            "lineage": lineage,
+        },
+    )
+
+    await db.commit()
+    pipeline_latency_ms = int((time.monotonic() - pipeline_start) * 1000)
+
+    return {
+        "a2_decision": decision,
+        "system_fit": system_fit,
+        "system_confidence": system_confidence,
+        "calibration_event_id": calibration_event_id,
+        "triggered_penalties": triggered_penalties,
+        "decision_rationale": decision_rationale,
+        "surface_created": surface_created,
+        "slug": slug,
+        "deployment_id": deployment_id,
+        "preview_id": preview_id,
+        "preview_url": preview_url,
+        "gate_blocked": gate_blocked,
+        "block_reason": block_reason,
+        "measurement_source": "BASE",
+        "test_mode": False,
+        "lineage": {
+            **lineage,
+            "stage_profiles": a2_inputs.get("stage_profiles"),
+            "stage_fits": a2_inputs.get("stage_fits"),
+            "stage_confidences": a2_inputs.get("stage_confidences"),
+            "stage_gates_passed": a2_inputs.get("stage_gates_passed"),
+            "measurement_quality": a2_inputs.get("measurement_quality"),
+        },
         "a2_latency_ms": a2_latency_ms,
         "pipeline_latency_ms": pipeline_latency_ms,
     }

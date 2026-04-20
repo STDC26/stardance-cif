@@ -195,20 +195,43 @@ class VariantGenerateBody(BaseModel):
     variant_count: int = Field(default=3, ge=1, le=10)
 
 
-def _parse_list_response(raw: str, list_key: Optional[str] = None) -> list:
+def _parse_list_response(
+    raw: str,
+    list_key: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    prompt_id: Optional[str] = None,
+    task_type: Optional[str] = None,
+) -> list:
     """Extract a JSON array from the LLM response.
 
     Accepts: a raw JSON array, an object with ``list_key`` holding the array,
     or either wrapped in ```json fences. Returns [] on failure.
+
+    Empty-list fallbacks emit a ``parse_list_response_empty`` WARNING with
+    the endpoint/prompt_id/task_type context and a parse_failure_reason so
+    prod can diagnose why the LLM reply didn't decode to a list.
     """
-    if not raw:
+    def _empty(reason: str) -> list:
+        logger.warning(
+            "parse_list_response_empty",
+            extra={
+                "endpoint": endpoint,
+                "prompt_id": prompt_id,
+                "task_type": task_type,
+                "raw_response_truncated": raw[:200] if raw else None,
+                "parse_failure_reason": reason,
+            },
+        )
         return []
+
+    if not raw:
+        return _empty("empty_raw_response")
     cleaned = re.sub(r"```(?:json)?\s*", "", raw)
     cleaned = re.sub(r"```\s*$", "", cleaned).strip()
     try:
         parsed = json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        return []
+    except (json.JSONDecodeError, ValueError) as e:
+        return _empty(f"json_decode_error: {e}")
     if isinstance(parsed, list):
         return parsed
     if isinstance(parsed, dict):
@@ -217,7 +240,10 @@ def _parse_list_response(raw: str, list_key: Optional[str] = None) -> list:
         for v in parsed.values():
             if isinstance(v, list):
                 return v
-    return []
+        return _empty(
+            f"no_list_in_object: keys={sorted(parsed.keys())[:10]}"
+        )
+    return _empty(f"unsupported_type: {type(parsed).__name__}")
 
 
 @router.post("/experiment-recommend")
@@ -284,7 +310,13 @@ async def experiment_recommend(
         raise HTTPException(status_code=502, detail=f"LLM call failed: {e}")
     latency_ms = int((time.monotonic() - t0) * 1000)
 
-    recommendations = _parse_list_response(raw, list_key="experiments")
+    recommendations = _parse_list_response(
+        raw,
+        list_key="experiments",
+        endpoint="/api/v1/copilot/experiment-recommend",
+        prompt_id="cif.experiment-recommend",
+        task_type="recommend",
+    )
 
     return {
         "recommendations": recommendations,
@@ -325,7 +357,13 @@ async def variant_generate(
         raise HTTPException(status_code=502, detail=f"LLM call failed: {e}")
     latency_ms = int((time.monotonic() - t0) * 1000)
 
-    variants = _parse_list_response(raw, list_key="variants")
+    variants = _parse_list_response(
+        raw,
+        list_key="variants",
+        endpoint="/api/v1/copilot/variant-generate",
+        prompt_id="cif.variant-generator",
+        task_type="recommend",
+    )
 
     return {
         "variants": variants,

@@ -1,16 +1,16 @@
-"""A2 → FORGE pipeline orchestration (TCE-11).
+"""A2 → FORGE pipeline (TCE-11 Path 3) — underwrite-only.
 
-Single POST /api/v1/a2/pipeline that:
-  1. Underwrites the brand via A2
-  2. If the decision is AUTO_LAUNCH or HUMAN_REVIEW, calls hub/generate
-  3. On AUTO_LAUNCH + gate_pass, runs the full FORGE create+deploy pipeline
-  4. On HUMAN_REVIEW + gate_pass, creates + publishes the surface and mints
-     a preview token (no production deploy)
-  5. On gate_pass=False OR PAUSE_AND_DIAGNOSE, returns gate_blocked without
-     creating a surface
+POST /api/v1/a2/pipeline
+  1. Calls A2 /v1/a2/underwrite with a synthetic payload derived from the
+     caller's CIF hcts_target_profile (must opt in via test_mode=True).
+  2. Routes FORGE side-effects based on the A2 decision:
+       AUTO_LAUNCH        → create surface + publish + deploy to production
+       HUMAN_REVIEW       → create surface + publish (no deploy) + mint preview
+       PAUSE_AND_DIAGNOSE → no surface
+  3. Emits an ``a2_pipeline_complete`` audit signal with the full context.
 
-Routing via public A2 URL (Option B). See app/services/a2_client.py for the
-Option A migration note.
+OUT OF SCOPE: /v1/hub/generate (requires campaign object model that CIF
+doesn't produce today — see a2_client.py for the Path 2 TODO).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.copilot import SurfaceCreateBrief
@@ -34,7 +34,7 @@ from app.models.preview import PreviewToken
 from app.models.signal import EventType, SignalEvent
 from app.models.surface import ReviewState
 from app.schemas.surface import ComponentConfigIn, SectionIn, SurfaceCreateIn
-from app.services.a2_client import a2_hub_generate, a2_underwrite
+from app.services.a2_client import a2_underwrite
 from app.services.cqx_sequencing_engine import sequence_surface
 from app.services.deployment_service import (
     deploy_surface as deploy_surface_service,
@@ -50,153 +50,51 @@ router = APIRouter(prefix="/api/v1/a2", tags=["a2"])
 _RENDERER_BASE = "https://sd-chubs-renderer.vercel.app"
 
 
-# ── Request / response models ───────────────────────────────────────────────
+# ── Request model ──────────────────────────────────────────────────────────
 
 
 class A2PipelineBody(BaseModel):
-    brand_context: dict[str, Any]
-    surface_brief: SurfaceCreateBrief
-    auto_launch: bool = True
+    brand_id: str
+    hcts_target_profile: dict[str, Any]
+    surface_brief: Optional[SurfaceCreateBrief] = None
+    test_mode: bool = False
 
 
-# ── Signal emission helper ─────────────────────────────────────────────────
+# ── Signal emission (best-effort) ──────────────────────────────────────────
 
 
-def _emit_pipeline_signal(
+def _emit_pipeline_complete_signal(
     db: AsyncSession,
-    surface_id: Optional[str],
-    version_id: Optional[str],
-    event_data: dict,
+    surface_id: Optional[Any],
+    version_id: Optional[Any],
+    metadata: dict,
 ) -> None:
     try:
         db.add(SignalEvent(
-            surface_id=surface_id if surface_id else None,
-            event_type=EventType.auto_launch,
+            surface_id=surface_id,
+            event_type=EventType.a2_pipeline_complete,
             event_data={
-                **event_data,
-                "source": "a2_pipeline",
-                "surface_version_id": version_id,
+                **metadata,
+                "surface_version_id": str(version_id) if version_id else None,
             },
         ))
     except Exception as e:
-        logger.warning("a2_pipeline signal emission failed: %s", e)
+        logger.warning("a2_pipeline_complete signal emission failed: %s", e)
 
 
-# ── Pipeline ───────────────────────────────────────────────────────────────
+# ── Helpers for surface creation under a specific routing decision ─────────
 
 
-@router.post("/pipeline")
-async def a2_pipeline(
-    body: A2PipelineBody,
-    api_key: str = Depends(require_api_key),
-    db: AsyncSession = Depends(get_db),
-):
-    """Brief → A2 underwrite → hub gate → FORGE deploy in one call."""
-    pipeline_start = time.monotonic()
+async def _create_and_publish_surface(
+    db: AsyncSession,
+    brief: SurfaceCreateBrief,
+    api_key: str,
+) -> tuple[Any, Any]:
+    """CQX → create → review → publish. Returns (surface, version).
 
-    # 1. A2 underwrite
-    try:
-        underwrite = await a2_underwrite(body.brand_context)
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "error": "a2_underwrite_failed",
-                "status": e.response.status_code if e.response else None,
-                "detail": e.response.text[:500] if e.response else str(e),
-            },
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "a2_underwrite_failed", "detail": str(e)},
-        )
-
-    decision = underwrite.get("decision")
-    calibration_event_id = underwrite.get("calibration_event_id")
-    a2_latency_ms = underwrite.get("_latency_ms")
-
-    # 2. If the decision permits it, call hub/generate
-    hub: dict[str, Any] = {}
-    hub_latency_ms: Optional[int] = None
-    if decision in ("AUTO_LAUNCH", "HUMAN_REVIEW"):
-        if not calibration_event_id:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "a2_missing_calibration_event_id",
-                    "underwrite": underwrite,
-                },
-            )
-        try:
-            hub = await a2_hub_generate(calibration_event_id, body.brand_context)
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "a2_hub_generate_failed",
-                    "status": e.response.status_code if e.response else None,
-                    "detail": e.response.text[:500] if e.response else str(e),
-                    "calibration_event_id": calibration_event_id,
-                },
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "a2_hub_generate_failed",
-                    "detail": str(e),
-                    "calibration_event_id": calibration_event_id,
-                },
-            )
-        hub_latency_ms = hub.get("_latency_ms")
-
-    gate_pass = bool(hub.get("gate_pass")) if hub else False
-    routing_band = hub.get("routing_band")
-    hub_id = hub.get("hub_id")
-
-    # 3. Gate-blocked paths — do not create a surface
-    if decision == "PAUSE_AND_DIAGNOSE" or (
-        decision in ("AUTO_LAUNCH", "HUMAN_REVIEW") and not gate_pass
-    ):
-        _emit_pipeline_signal(db, None, None, {
-            "a2_decision": decision,
-            "gate_pass": gate_pass,
-            "calibration_event_id": calibration_event_id,
-            "hub_id": hub_id,
-            "routing_band": routing_band,
-            "gate_blocked": True,
-        })
-        await db.commit()
-        pipeline_latency_ms = int((time.monotonic() - pipeline_start) * 1000)
-        return {
-            "a2_decision": decision,
-            "calibration_event_id": calibration_event_id,
-            "hub_id": hub_id,
-            "routing_band": routing_band,
-            "gate_pass": gate_pass,
-            "surface_created": False,
-            "slug": None,
-            "deployment_id": None,
-            "preview_id": None,
-            "gate_blocked": True,
-            "reason": (
-                "A2 decision PAUSE_AND_DIAGNOSE"
-                if decision == "PAUSE_AND_DIAGNOSE"
-                else "hub gate_pass=False"
-            ),
-            "a2_latency_ms": a2_latency_ms,
-            "hub_latency_ms": hub_latency_ms,
-            "pipeline_latency_ms": pipeline_latency_ms,
-        }
-
-    # 4. Build + persist the surface (shared by AUTO_LAUNCH and HUMAN_REVIEW paths)
-    brief = body.surface_brief
-
-    # Fold brand_context.hcts_target_profile into the brief if not provided
-    if not brief.hcts_target_profile and body.brand_context.get("hcts_target_profile"):
-        brief.hcts_target_profile = body.brand_context["hcts_target_profile"]
-
+    Used by both AUTO_LAUNCH (followed by deploy) and HUMAN_REVIEW
+    (followed by preview-token mint). Raises HTTPException on failure.
+    """
     seq = sequence_surface(
         hcts_profile=brief.hcts_target_profile or {},
         scss_position=brief.scss_position,
@@ -257,67 +155,181 @@ async def a2_pipeline(
             status_code=422,
             detail={"error": "publish_transition_failed", "failure_reason": err},
         )
+    return surface, version
 
-    # 5. Deploy or mint preview based on A2 decision
+
+def _mint_preview(
+    db: AsyncSession,
+    surface_id: Any,
+    surface_slug: str,
+    version_id: Any,
+    api_key: str,
+) -> tuple[str, str]:
+    secret = secrets.token_urlsafe(16)
+    preview_id = f"prev-{secret[:8]}"
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=48)
+    db.add(PreviewToken(
+        preview_id=preview_id,
+        asset_id=surface_id,
+        asset_type="conversion_surface",
+        asset_slug=surface_slug,
+        version_id=version_id,
+        expires_at=expires_at,
+        created_by=api_key,
+    ))
+    preview_url = f"{_RENDERER_BASE}/?slug={surface_slug}&preview={preview_id}"
+    return preview_id, preview_url
+
+
+# ── Endpoint ───────────────────────────────────────────────────────────────
+
+
+@router.post("/pipeline")
+async def a2_pipeline(
+    body: A2PipelineBody,
+    api_key: str = Depends(require_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Underwrite via A2, then route FORGE side-effects by A2 decision."""
+    pipeline_start = time.monotonic()
+
+    if not body.test_mode:
+        # Path 3 requires the caller to acknowledge that the A2 payload is
+        # synthesised from CIF HCTS rather than produced by a real campaign
+        # scoring pipeline. Remove this gate once Path 2 lands.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "test_mode_required",
+                "reason": (
+                    "Path 3 uses synthetic A2 inputs derived from HCTS. "
+                    "Set test_mode=true to acknowledge."
+                ),
+            },
+        )
+
+    # 1. A2 underwrite
+    try:
+        underwrite = await a2_underwrite(body.brand_id, body.hcts_target_profile)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "a2_underwrite_failed",
+                "status": e.response.status_code if e.response else None,
+                "detail": e.response.text[:500] if e.response else str(e),
+                "brand_id": body.brand_id,
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "a2_underwrite_failed",
+                "detail": str(e),
+                "brand_id": body.brand_id,
+            },
+        )
+
+    decision: str = underwrite.get("decision", "PAUSE_AND_DIAGNOSE")
+    system_fit = underwrite.get("system_fit")
+    system_confidence = underwrite.get("system_confidence")
+    calibration_event_id = underwrite.get("calibration_event_id")
+    triggered_penalties = underwrite.get("triggered_penalties") or []
+    decision_rationale = underwrite.get("decision_rationale") or []
+    a2_latency_ms = underwrite.get("_latency_ms")
+
+    # 2. FORGE routing based on decision
+    surface_created = False
+    slug: Optional[str] = None
+    surface_uuid: Optional[Any] = None
+    version_uuid: Optional[Any] = None
     deployment_id: Optional[str] = None
     preview_id: Optional[str] = None
     preview_url: Optional[str] = None
+    gate_blocked = False
+    block_reason: Optional[str] = None
 
-    if decision == "AUTO_LAUNCH" and body.auto_launch:
-        deployment, err = await deploy_surface_service(
-            db, surface.id, version.id,
-            DeploymentEnvironment.production, api_key,
+    if decision == "PAUSE_AND_DIAGNOSE":
+        gate_blocked = True
+        block_reason = (
+            decision_rationale[0] if decision_rationale
+            else "A2 decision PAUSE_AND_DIAGNOSE"
         )
-        if deployment is None:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "deploy_failed", "failure_reason": err},
-            )
-        deployment_id = str(deployment.id)
-    else:
-        # HUMAN_REVIEW (or AUTO_LAUNCH with auto_launch=False) — mint preview token
-        secret = secrets.token_urlsafe(16)
-        preview_id = f"prev-{secret[:8]}"
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=48)
-        db.add(PreviewToken(
-            preview_id=preview_id,
-            asset_id=surface.id,
-            asset_type="conversion_surface",
-            asset_slug=surface.slug,
-            version_id=version.id,
-            expires_at=expires_at,
-            created_by=api_key,
-        ))
-        preview_url = f"{_RENDERER_BASE}/?slug={surface.slug}&preview={preview_id}"
 
-    _emit_pipeline_signal(db, str(surface.id), str(version.id), {
-        "a2_decision": decision,
-        "gate_pass": gate_pass,
-        "calibration_event_id": calibration_event_id,
-        "hub_id": hub_id,
-        "routing_band": routing_band,
-        "slug": surface.slug,
-        "deployment_id": deployment_id,
-        "preview_id": preview_id,
-    })
+    elif decision == "AUTO_LAUNCH":
+        if body.surface_brief is not None:
+            surface, version = await _create_and_publish_surface(
+                db, body.surface_brief, api_key,
+            )
+            deployment, err = await deploy_surface_service(
+                db, surface.id, version.id,
+                DeploymentEnvironment.production, api_key,
+            )
+            if deployment is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "deploy_failed", "failure_reason": err},
+                )
+            surface_created = True
+            slug = surface.slug
+            surface_uuid = surface.id
+            version_uuid = version.id
+            deployment_id = str(deployment.id)
+
+    elif decision == "HUMAN_REVIEW":
+        if body.surface_brief is not None:
+            surface, version = await _create_and_publish_surface(
+                db, body.surface_brief, api_key,
+            )
+            preview_id, preview_url = _mint_preview(
+                db, surface.id, surface.slug, version.id, api_key,
+            )
+            surface_created = True
+            slug = surface.slug
+            surface_uuid = surface.id
+            version_uuid = version.id
+
+    else:
+        # Any decision outside the known trio — treat as a block, log loudly.
+        logger.warning("a2_pipeline: unexpected decision=%r", decision)
+        gate_blocked = True
+        block_reason = f"Unknown A2 decision: {decision!r}"
+
+    # 3. Audit log
+    _emit_pipeline_complete_signal(
+        db, surface_uuid, version_uuid,
+        {
+            "brand_id": body.brand_id,
+            "a2_decision": decision,
+            "system_fit": system_fit,
+            "system_confidence": system_confidence,
+            "surface_created": surface_created,
+            "slug": slug,
+            "test_mode": True,
+            "calibration_event_id": calibration_event_id,
+            "triggered_penalties": triggered_penalties,
+        },
+    )
 
     await db.commit()
     pipeline_latency_ms = int((time.monotonic() - pipeline_start) * 1000)
 
     return {
         "a2_decision": decision,
+        "system_fit": system_fit,
+        "system_confidence": system_confidence,
         "calibration_event_id": calibration_event_id,
-        "hub_id": hub_id,
-        "routing_band": routing_band,
-        "gate_pass": gate_pass,
-        "surface_created": True,
-        "slug": surface.slug,
-        "surface_id": str(surface.id),
-        "version_id": str(version.id),
+        "triggered_penalties": triggered_penalties,
+        "decision_rationale": decision_rationale,
+        "surface_created": surface_created,
+        "slug": slug,
         "deployment_id": deployment_id,
         "preview_id": preview_id,
         "preview_url": preview_url,
+        "gate_blocked": gate_blocked,
+        "block_reason": block_reason,
+        "test_mode": True,
         "a2_latency_ms": a2_latency_ms,
-        "hub_latency_ms": hub_latency_ms,
         "pipeline_latency_ms": pipeline_latency_ms,
     }

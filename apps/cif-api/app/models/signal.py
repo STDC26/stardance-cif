@@ -24,6 +24,7 @@ class EventType(str, enum.Enum):
     branch_selected = "branch_selected"
     qualification_result = "qualification_result"
     asset_reviewed = "asset_reviewed"
+    auto_launch = "auto_launch"
 
 class SignalEvent(Base):
     __tablename__ = "signal_events"

@@ -10,7 +10,9 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -21,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import require_api_key
 from app.db.session import AsyncSessionLocal, get_db
 from app.models.deployment import DeploymentEnvironment
+from app.models.preview import PreviewToken
+from app.models.signal import EventType, SignalEvent
 from app.models.surface import ReviewState
 from app.schemas.surface import ComponentConfigIn, SectionIn, SurfaceCreateIn
 from app.services.ai_provider.external_llm_client import call_external
@@ -402,11 +406,20 @@ class SurfaceCreateBrief(BaseModel):
     hcts_target_profile: Optional[dict] = None
     cqx_intensity: str = "medium"
     components: list[dict] = Field(default_factory=list)
+    auto_launch: bool = False
+    auto_launch_threshold: int = Field(default=80, ge=0, le=100)
 
 
 class SurfaceCreateBatchBody(BaseModel):
     briefs: list[SurfaceCreateBrief]
     stop_on_failure: bool = False
+    # Batch-level AUTO_LAUNCH defaults — applied uniformly to every brief,
+    # overriding any per-brief settings so the cohort is gated consistently.
+    auto_launch: bool = False
+    auto_launch_threshold: int = Field(default=80, ge=0, le=100)
+
+
+_RENDERER_BASE = "https://sd-chubs-renderer.vercel.app"
 
 
 def _check_hcts(profile: Optional[dict]) -> tuple[bool, Optional[str]]:
@@ -421,6 +434,65 @@ def _check_hcts(profile: Optional[dict]) -> tuple[bool, Optional[str]]:
     if authenticity < _HCTS_MIN_AUTHENTICITY:
         return False, f"authenticity {authenticity} < {_HCTS_MIN_AUTHENTICITY}"
     return True, None
+
+
+def _evaluate_auto_launch(
+    hcts_profile: Optional[dict],
+    conviction_expectation: str,
+    threshold: int = 80,
+) -> tuple[bool, str, Optional[float]]:
+    """Decide whether a surface may deploy without human review.
+
+    Returns (approved, reason, avg_hcts_score). avg_hcts_score is None when
+    no scores were provided.
+    """
+    if conviction_expectation != "actionable":
+        return False, "conviction_expectation not actionable", None
+
+    profile = hcts_profile or {}
+    scores = [v for v in profile.values() if isinstance(v, (int, float))]
+    if not scores:
+        return False, "no HCTS scores provided", None
+
+    avg_score = sum(scores) / len(scores)
+    if avg_score < threshold:
+        return (
+            False,
+            f"avg HCTS score {avg_score:.1f} below threshold {threshold}",
+            avg_score,
+        )
+
+    trust = profile.get("trust", 100)
+    ethics = profile.get("ethics", 100)
+    authenticity = profile.get("authenticity", 100)
+    if trust < _HCTS_MIN_TRUST:
+        return False, "HCTS hard block: trust < 60", avg_score
+    if ethics < _HCTS_MIN_ETHICS:
+        return False, "HCTS hard block: ethics < 65", avg_score
+    if authenticity < _HCTS_MIN_AUTHENTICITY:
+        return False, "HCTS hard block: authenticity < 55", avg_score
+
+    return True, "AUTO_LAUNCH approved", avg_score
+
+
+def _emit_auto_launch_signal(
+    db: AsyncSession,
+    surface_id: UUID,
+    version_id: UUID,
+    event_data: dict,
+) -> None:
+    """Best-effort SignalEvent emission — never raises."""
+    try:
+        db.add(SignalEvent(
+            surface_id=surface_id,
+            event_type=EventType.auto_launch,
+            event_data={
+                **event_data,
+                "surface_version_id": str(version_id) if version_id else None,
+            },
+        ))
+    except Exception as e:
+        logger.warning("auto_launch signal emission failed: %s", e)
 
 
 async def _run_surface_pipeline(
@@ -513,23 +585,87 @@ async def _run_surface_pipeline(
             detail={"error": "publish_transition_failed", "failure_reason": err},
         )
 
-    # 5. Deploy to production
-    deployment, err = await deploy_surface_service(
-        db, surface.id, version.id,
-        DeploymentEnvironment.production, api_key,
-    )
-    if deployment is None:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "deploy_failed", "failure_reason": err},
+    # 5. AUTO_LAUNCH decision — only evaluated when the caller opts in
+    auto_launch_block: Optional[dict] = None
+    should_deploy = True
+    if brief.auto_launch:
+        approved, reason, avg_score = _evaluate_auto_launch(
+            brief.hcts_target_profile,
+            seq.conviction_expectation,
+            brief.auto_launch_threshold,
+        )
+        if approved:
+            auto_launch_block = {
+                "approved": True,
+                "reason": reason,
+                "avg_hcts_score": round(avg_score, 2) if avg_score is not None else None,
+                "threshold_used": brief.auto_launch_threshold,
+                "deployed": True,
+            }
+        else:
+            should_deploy = False
+            # Mint a preview token so the surface can be reviewed by a human.
+            secret = secrets.token_urlsafe(16)
+            preview_id = f"prev-{secret[:8]}"
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=48)
+            token = PreviewToken(
+                preview_id=preview_id,
+                asset_id=surface.id,
+                asset_type="conversion_surface",
+                asset_slug=surface.slug,
+                version_id=version.id,
+                expires_at=expires_at,
+                created_by=api_key,
+            )
+            db.add(token)
+            preview_url = f"{_RENDERER_BASE}/?slug={surface.slug}&preview={preview_id}"
+            auto_launch_block = {
+                "approved": False,
+                "reason": reason,
+                "avg_hcts_score": round(avg_score, 2) if avg_score is not None else None,
+                "threshold_used": brief.auto_launch_threshold,
+                "deployed": False,
+                "routed_to_review": True,
+                "preview_id": preview_id,
+                "preview_url": preview_url,
+            }
+
+        _emit_auto_launch_signal(
+            db, surface.id, version.id,
+            {
+                "slug": surface.slug,
+                "auto_launch_approved": approved,
+                "avg_hcts_score": round(avg_score, 2) if avg_score is not None else None,
+                "conviction_expectation": seq.conviction_expectation,
+                "threshold_used": brief.auto_launch_threshold,
+                **(
+                    {"approval_reason": reason}
+                    if approved
+                    else {"block_reason": reason, "routed_to_review": True}
+                ),
+            },
         )
 
+    # 6. Deploy to production (skipped when AUTO_LAUNCH blocks)
+    deployment_id: Optional[str] = None
+    if should_deploy:
+        deployment, err = await deploy_surface_service(
+            db, surface.id, version.id,
+            DeploymentEnvironment.production, api_key,
+        )
+        if deployment is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "deploy_failed", "failure_reason": err},
+            )
+        deployment_id = str(deployment.id)
+
     latency_ms = int((time.monotonic() - start) * 1000)
-    return {
+    response: dict = {
         "surface_id": str(surface.id),
         "version_id": str(version.id),
         "slug": surface.slug,
-        "deployment_id": str(deployment.id),
+        "deployment_id": deployment_id,
         "cqx_sequencing": {
             "validation": seq.validation,
             "conviction_expectation": seq.conviction_expectation,
@@ -538,6 +674,9 @@ async def _run_surface_pipeline(
         "hcts_check": "passed",
         "latency_ms": latency_ms,
     }
+    if auto_launch_block is not None:
+        response["auto_launch"] = auto_launch_block
+    return response
 
 
 @router.post("/surface-create")
@@ -566,7 +705,7 @@ async def _run_pipeline_isolated(
         try:
             result = await _run_surface_pipeline(db, brief, api_key)
             await db.commit()
-            return {
+            out: dict = {
                 "index": index,
                 "status": "success",
                 "slug": result["slug"],
@@ -576,6 +715,9 @@ async def _run_pipeline_isolated(
                 "conviction_expectation":
                     result["cqx_sequencing"]["conviction_expectation"],
             }
+            if "auto_launch" in result:
+                out["auto_launch"] = result["auto_launch"]
+            return out
         except HTTPException as he:
             await db.rollback()
             detail = he.detail if isinstance(he.detail, dict) else {"error": str(he.detail)}
@@ -601,8 +743,18 @@ async def surface_create_batch(
     body: SurfaceCreateBatchBody,
     api_key: str = Depends(require_api_key),
 ):
-    """TCE-08 — array of briefs processed in parallel via asyncio.gather."""
+    """TCE-08 — array of briefs processed in parallel via asyncio.gather.
+
+    When ``auto_launch`` is set at the batch level, the value and threshold
+    are propagated onto every brief — per-brief auto_launch settings are
+    overridden so the cohort is gated consistently.
+    """
     start = time.monotonic()
+
+    # Propagate batch-level AUTO_LAUNCH settings onto each brief.
+    for brief in body.briefs:
+        brief.auto_launch = body.auto_launch
+        brief.auto_launch_threshold = body.auto_launch_threshold
 
     if body.stop_on_failure:
         # Sequential with early exit

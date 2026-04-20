@@ -25,6 +25,7 @@ async def call_external(
     system: Optional[str] = None,
     task_type: str = "advanced_reasoning",
     variables: Optional[dict[str, Any]] = None,
+    prompt_id: Optional[str] = None,
 ) -> str:
     """
     Routes prompt through stardance-llm-service.
@@ -36,9 +37,14 @@ async def call_external(
     can substitute them via ``content.format(**payload)``. Without
     ``variables``, the rendered prompt is sent as ``{"prompt": ...}``
     (falls back to raw-template append on the remote side).
+
+    When ``prompt_id`` is provided it overrides the PROMPT_ID_MAP lookup.
+    Required for endpoints where multiple templates share a task_type
+    (e.g. both experiment-recommend and variant-generator route under
+    ``task_type="recommend"`` but resolve to different prompts).
     """
     llm_task_type = CIF_TO_LLM_TASK_MAP.get(task_type, "specification_generation")
-    prompt_id = PROMPT_ID_MAP.get(task_type, "cif.copilot")
+    effective_prompt_id = prompt_id or PROMPT_ID_MAP.get(task_type, "cif.copilot")
 
     if variables:
         inner_payload: dict[str, Any] = dict(variables)
@@ -48,7 +54,7 @@ async def call_external(
     payload: dict[str, Any] = {
         "calling_system": "CIF",
         "task_type": llm_task_type,
-        "prompt_id": prompt_id,
+        "prompt_id": effective_prompt_id,
         "payload": inner_payload,
         "high_stakes_flag": False,
         "cache_eligible": True,

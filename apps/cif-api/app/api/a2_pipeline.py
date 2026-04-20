@@ -250,11 +250,16 @@ async def a2_pipeline(
     gate_blocked = False
     block_reason: Optional[str] = None
 
-    if decision == "PAUSE_AND_DIAGNOSE":
+    # Known A2 decisions:
+    #   AUTO_LAUNCH        → deploy surface (if brief provided)
+    #   HUMAN_REVIEW       → create draft + mint preview token
+    #   PAUSE_AND_DIAGNOSE → gate_blocked, no surface
+    #   NO_LAUNCH          → gate_blocked, no surface (hard stop, no review)
+    if decision in ("PAUSE_AND_DIAGNOSE", "NO_LAUNCH"):
         gate_blocked = True
         block_reason = (
             decision_rationale[0] if decision_rationale
-            else "A2 decision PAUSE_AND_DIAGNOSE"
+            else f"A2 decision: {decision}"
         )
 
     elif decision == "AUTO_LAUNCH":
@@ -291,7 +296,7 @@ async def a2_pipeline(
             version_uuid = version.id
 
     else:
-        # Any decision outside the known trio — treat as a block, log loudly.
+        # Any decision outside the known four — treat as a block, log loudly.
         logger.warning("a2_pipeline: unexpected decision=%r", decision)
         gate_blocked = True
         block_reason = f"Unknown A2 decision: {decision!r}"

@@ -6,6 +6,7 @@ All endpoints return drafts with status="draft".
 No platform state changes — drafts are returned, not persisted.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -18,14 +19,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import require_api_key
-from app.db.session import get_db
+from app.db.session import AsyncSessionLocal, get_db
+from app.models.deployment import DeploymentEnvironment
+from app.models.surface import ReviewState
+from app.schemas.surface import ComponentConfigIn, SectionIn, SurfaceCreateIn
 from app.services.ai_provider.external_llm_client import call_external
 from app.services.copilot import (
     generate_draft,
     CopilotRequest,
     CopilotAction,
 )
+from app.services.cqx_sequencing_engine import sequence_surface
+from app.services.deployment_service import (
+    deploy_surface as deploy_surface_service,
+    transition_version_state,
+)
 from app.services.retrieval import RetrievalRequest, build_context
+from app.services.surface_service import create_surface as create_surface_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/copilot", tags=["copilot"])
@@ -370,5 +380,253 @@ async def variant_generate(
         "raw_response": raw,
         "component_type": body.component_type,
         "variant_count": body.variant_count,
+        "latency_ms": latency_ms,
+    }
+
+
+# ---------------------------------------------------------------------------
+# TCE-08 — automated CHubs pipeline (brief → deployed slug)
+# ---------------------------------------------------------------------------
+
+# HCTS hard-block thresholds (defaults to 100 when the trait is absent from
+# the caller's profile — a missing score does not fail the check).
+_HCTS_MIN_TRUST = 60
+_HCTS_MIN_ETHICS = 65
+_HCTS_MIN_AUTHENTICITY = 55
+
+
+class SurfaceCreateBrief(BaseModel):
+    name: str
+    description: Optional[str] = None
+    scss_position: str = "entry"
+    hcts_target_profile: Optional[dict] = None
+    cqx_intensity: str = "medium"
+    components: list[dict] = Field(default_factory=list)
+
+
+class SurfaceCreateBatchBody(BaseModel):
+    briefs: list[SurfaceCreateBrief]
+    stop_on_failure: bool = False
+
+
+def _check_hcts(profile: Optional[dict]) -> tuple[bool, Optional[str]]:
+    p = profile or {}
+    trust = p.get("trust", 100)
+    ethics = p.get("ethics", 100)
+    authenticity = p.get("authenticity", 100)
+    if trust < _HCTS_MIN_TRUST:
+        return False, f"trust {trust} < {_HCTS_MIN_TRUST}"
+    if ethics < _HCTS_MIN_ETHICS:
+        return False, f"ethics {ethics} < {_HCTS_MIN_ETHICS}"
+    if authenticity < _HCTS_MIN_AUTHENTICITY:
+        return False, f"authenticity {authenticity} < {_HCTS_MIN_AUTHENTICITY}"
+    return True, None
+
+
+async def _run_surface_pipeline(
+    db: AsyncSession,
+    brief: SurfaceCreateBrief,
+    api_key: str,
+) -> dict:
+    """Run one brief through CQX → HCTS → create → review → publish → deploy.
+
+    Raises HTTPException on any stage failure — callers must translate to a
+    status-coded response. Returns the success dict on completion.
+    """
+    start = time.monotonic()
+
+    # 1. CQX sequencing
+    seq = sequence_surface(
+        hcts_profile=brief.hcts_target_profile or {},
+        scss_position=brief.scss_position,
+        cqx_intensity=brief.cqx_intensity,
+        components=brief.components,
+    )
+    if seq.validation != "PASS":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "cqx_validation_failed",
+                "failure_reason": seq.failure_reason,
+                "failure_mode": seq.failure_mode,
+                "stage_coverage": seq.stage_coverage,
+            },
+        )
+
+    # 2. HCTS hard blocks
+    hcts_ok, hcts_reason = _check_hcts(brief.hcts_target_profile)
+    if not hcts_ok:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "hcts_blocked",
+                "failure_reason": hcts_reason,
+            },
+        )
+
+    # 3. Create surface via service layer
+    try:
+        sections = [
+            SectionIn(
+                section_id="main",
+                components=[ComponentConfigIn(**c) for c in seq.component_sequence],
+            )
+        ]
+    except Exception as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "component_validation_failed", "failure_reason": str(e)},
+        )
+
+    surface_in = SurfaceCreateIn(
+        name=brief.name,
+        description=brief.description,
+        type="conversion_surface",
+        sections=sections,
+        scss_position=brief.scss_position,
+        hcts_target_profile=brief.hcts_target_profile,
+        cqx_intensity=brief.cqx_intensity,
+    )
+    surface, version = await create_surface_service(db, surface_in)
+    if surface is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "surface_create_failed", "failure_reason": version},
+        )
+
+    # 4. State transitions draft → review → published
+    reviewed, err = await transition_version_state(
+        db, surface.id, version.id, ReviewState.review, api_key,
+    )
+    if reviewed is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "review_transition_failed", "failure_reason": err},
+        )
+
+    published, err = await transition_version_state(
+        db, surface.id, version.id, ReviewState.published, api_key,
+    )
+    if published is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "publish_transition_failed", "failure_reason": err},
+        )
+
+    # 5. Deploy to production
+    deployment, err = await deploy_surface_service(
+        db, surface.id, version.id,
+        DeploymentEnvironment.production, api_key,
+    )
+    if deployment is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "deploy_failed", "failure_reason": err},
+        )
+
+    latency_ms = int((time.monotonic() - start) * 1000)
+    return {
+        "surface_id": str(surface.id),
+        "version_id": str(version.id),
+        "slug": surface.slug,
+        "deployment_id": str(deployment.id),
+        "cqx_sequencing": {
+            "validation": seq.validation,
+            "conviction_expectation": seq.conviction_expectation,
+            "stage_coverage": seq.stage_coverage,
+        },
+        "hcts_check": "passed",
+        "latency_ms": latency_ms,
+    }
+
+
+@router.post("/surface-create")
+async def surface_create(
+    body: SurfaceCreateBrief,
+    api_key: str = Depends(require_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """TCE-08 — single brief → deployed surface in one call."""
+    try:
+        return await _run_surface_pipeline(db, body, api_key)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("surface-create pipeline error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _run_pipeline_isolated(
+    index: int,
+    brief: SurfaceCreateBrief,
+    api_key: str,
+) -> dict:
+    """Run one pipeline with an independent DB session (for gather)."""
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await _run_surface_pipeline(db, brief, api_key)
+            await db.commit()
+            return {
+                "index": index,
+                "status": "success",
+                "slug": result["slug"],
+                "surface_id": result["surface_id"],
+                "version_id": result["version_id"],
+                "deployment_id": result["deployment_id"],
+                "conviction_expectation":
+                    result["cqx_sequencing"]["conviction_expectation"],
+            }
+        except HTTPException as he:
+            await db.rollback()
+            detail = he.detail if isinstance(he.detail, dict) else {"error": str(he.detail)}
+            return {
+                "index": index,
+                "status": "failed",
+                "error": detail.get("failure_reason") or detail.get("error") or str(detail),
+                "failure_mode": detail.get("failure_mode"),
+            }
+        except Exception as e:
+            await db.rollback()
+            logger.exception("batch pipeline index=%d error: %s", index, e)
+            return {
+                "index": index,
+                "status": "failed",
+                "error": str(e),
+                "failure_mode": "unexpected_error",
+            }
+
+
+@router.post("/surface-create-batch")
+async def surface_create_batch(
+    body: SurfaceCreateBatchBody,
+    api_key: str = Depends(require_api_key),
+):
+    """TCE-08 — array of briefs processed in parallel via asyncio.gather."""
+    start = time.monotonic()
+
+    if body.stop_on_failure:
+        # Sequential with early exit
+        results: list[dict] = []
+        for i, brief in enumerate(body.briefs):
+            r = await _run_pipeline_isolated(i, brief, api_key)
+            results.append(r)
+            if r["status"] == "failed":
+                break
+    else:
+        tasks = [
+            _run_pipeline_isolated(i, brief, api_key)
+            for i, brief in enumerate(body.briefs)
+        ]
+        results = await asyncio.gather(*tasks)
+
+    succeeded = sum(1 for r in results if r["status"] == "success")
+    failed = sum(1 for r in results if r["status"] == "failed")
+    latency_ms = int((time.monotonic() - start) * 1000)
+
+    return {
+        "results": list(results),
+        "total": len(body.briefs),
+        "succeeded": succeeded,
+        "failed": failed,
         "latency_ms": latency_ms,
     }
